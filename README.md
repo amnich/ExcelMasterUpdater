@@ -79,7 +79,7 @@ Built as an architectural sibling of `Compare-ExcelFiles.ps1`, it introduces row
 ## Directory Layout
 
 ```
-UpdateExcelBaseFileProject/
+ExcelMasterUpdater/
 ├── start.ps1                       # Entry-point launcher (STA thread apartment guard, -UseExe)
 ├── Master-Updater.ps1              # Main single-script module (GUI & Headless engine)
 ├── Watch-IncomingFolder.ps1        # Folder-watch daemon & auto-import runner

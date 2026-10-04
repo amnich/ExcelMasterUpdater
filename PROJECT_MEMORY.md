@@ -1,6 +1,6 @@
 ﻿# Excel Master Updater — Project Memory & Technical Blueprint
 
-> **File:** `D:\Skrypty\Mnich_Adam_Skrypty\!Daily\UpdateExcelBaseFileProject\PROJECT_MEMORY.md`  
+> **File:** `\ExcelMasterUpdater\PROJECT_MEMORY.md`  
 > **Status:** Production Reference / System Living Specification  
 > **Encoding:** UTF-8 with BOM (`0xEF, 0xBB, 0xBF`)  
 > **Compatibility:** Windows PowerShell 5.1 & PowerShell 7.x (Core)  
@@ -44,7 +44,7 @@ Excel Master Updater provides:
 ## 3. Repository & Directory Structure
 
 ```
-D:\Skrypty\Mnich_Adam_Skrypty\!Daily\UpdateExcelBaseFileProject\
+\ExcelMasterUpdater\
 ├── Master-Updater.ps1        # Monolithic production script (Regions 1-10, ~7,300 lines)
 ├── Master-Updater.exe        # Compiled standalone binary (PS2EXE)
 ├── start.ps1                 # Universal launcher (dual PS5.1/PS7 engine & parameter forwarder)
