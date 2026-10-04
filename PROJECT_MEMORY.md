@@ -384,3 +384,11 @@ The test suite provides comprehensive coverage across the entire engine and GUI 
   2. Maintain 100% key and text parity across English (`USER_GUIDE_EN.md`), Polish (`USER_GUIDE_PL.md`), German (`USER_GUIDE_DE.md`), and consolidated `USER_GUIDE.md`.
   3. Wire in-app help modal cards directly into `language.json` (`HelpWorkflowCard*`, `HelpShortcutsCard*`).
   4. Enforce UTF-8 with BOM across all documentation and configuration artifacts via `[System.IO.File]::WriteAllText($path, $content, [System.Text.UTF8Encoding]::new($true))`.
+
+### 13. Multi-Column Concatenate Mapping & N:1 / 1:N Column Transformations
+- **Gotcha**: When matching records between Excel sheets where one file stores address data in a single combined cell (e.g. `Adres: "Ulica 10, Miasto"`) and the other stores address data in separate columns (e.g. `Adres: "Ulica 10"`, `Miasto: "Miasto"`), comparing individual columns causes false differences. Furthermore, standard single-selection ComboBoxes in mapping dialogs prevent selecting multiple source or target columns.
+- **Rule**:
+  1. Provide multi-select ListBoxes (`SelectionMode="Extended"`) for both Base and Incoming columns in the Rule Editor dialog (`ShowRuleDialog`).
+  2. In `Invoke-MasterCompare`, for any rule configured with `MergeMode = 'Concatenate'` and multiple columns on either side, evaluate overall merged equality first via `[FastDiffHelper]::MergeValues` and `[FastDiffHelper]::AreEqual`. If merged strings are equal, bypass individual column diffs to avoid false positives.
+  3. In `Get-ProjectedRow`, automatically split incoming values across multiple base columns when `MergeMode = 'Concatenate'` and `Separator` is specified (e.g. `", "`), ensuring cell write-back accurately updates each individual base cell.
+  4. Provide both "+ Add Rule" and "Edit Rule" capabilities (including double-click on `gridMappingRules`) with live preview cards displaying formatted Concatenate combinations.

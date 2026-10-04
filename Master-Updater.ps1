@@ -1559,9 +1559,10 @@ function Get-ProjectedRow {
         }
 
         # Case 2: Delimiter split (1 update col -> multiple base cols)
-        if (-not [string]::IsNullOrEmpty($sSep) -and $updCols.Length -ge 1 -and $baseCols.Length -gt 1) {
+        $sepToSplit = if (-not [string]::IsNullOrEmpty($sSep)) { $sSep } elseif ($mode -eq 'Concatenate' -and -not [string]::IsNullOrEmpty($sep)) { $sep } else { '' }
+        if (-not [string]::IsNullOrEmpty($sepToSplit) -and $updCols.Length -ge 1 -and $baseCols.Length -gt 1) {
             $srcVal = if (-not [string]::IsNullOrEmpty($updCols[0]) -and $IncomingValues.ContainsKey($updCols[0])) { $IncomingValues[$updCols[0]] } else { '' }
-            $parts = $srcVal -split [regex]::Escape($sSep)
+            $parts = $srcVal -split [regex]::Escape($sepToSplit)
             for ($b = 0; $b -lt $baseCols.Length; $b++) {
                 $bName = $baseCols[$b]
                 $val = if ($b -lt $parts.Length) { $parts[$b].Trim() } else { '' }
@@ -1867,7 +1868,37 @@ function Invoke-MasterCompare {
 
                 # Compare all mapped columns
                 foreach ($rule in $rules) {
-                    foreach ($baseCol in $rule.BaseColumns) {
+                    $bCols = if ($rule -is [System.Collections.IDictionary]) { if ($rule.Contains('BaseColumns')) { @($rule['BaseColumns']) } else { @() } } elseif ($rule.PSObject.Properties['BaseColumns']) { @($rule.BaseColumns) } else { @() }
+                    $uCols = if ($rule -is [System.Collections.IDictionary]) { if ($rule.Contains('UpdateColumns')) { @($rule['UpdateColumns']) } else { @() } } elseif ($rule.PSObject.Properties['UpdateColumns']) { @($rule.UpdateColumns) } else { @() }
+                    $mMode = if ($rule -is [System.Collections.IDictionary]) { if ($rule.Contains('MergeMode')) { $rule['MergeMode'] } else { 'Exact' } } elseif ($rule.PSObject.Properties['MergeMode']) { $rule.MergeMode } else { 'Exact' }
+                    $sep   = if ($rule -is [System.Collections.IDictionary]) { if ($rule.Contains('Separator')) { $rule['Separator'] } else { '' } } elseif ($rule.PSObject.Properties['Separator']) { $rule.Separator } else { '' }
+
+                    $bCols = @($bCols | Where-Object { $null -ne $_ -and [string]::IsNullOrWhiteSpace($_) -eq $false })
+                    $uCols = @($uCols | Where-Object { $null -ne $_ -and [string]::IsNullOrWhiteSpace($_) -eq $false })
+
+                    # Multi-column Concatenate equality check (e.g. 2 Base columns <-> 1 Incoming column, or vice versa)
+                    if ($mMode -eq 'Concatenate' -and ($bCols.Length -gt 1 -or $uCols.Length -gt 1)) {
+                        $bVals = [System.Collections.Generic.List[string]]::new()
+                        foreach ($bc in $bCols) {
+                            $v = if ($matched.Values.ContainsKey($bc) -and $null -ne $matched.Values[$bc]) { $matched.Values[$bc].ToString() } else { '' }
+                            $bVals.Add($v)
+                        }
+                        $bMerged = [FastDiffHelper]::MergeValues($bVals, $mMode, $sep, $opts.Trim)
+
+                        $uVals = [System.Collections.Generic.List[string]]::new()
+                        foreach ($uc in $uCols) {
+                            $v = if ($inc.Values.ContainsKey($uc) -and $null -ne $inc.Values[$uc]) { $inc.Values[$uc].ToString() } else { '' }
+                            $uVals.Add($v)
+                        }
+                        $uMerged = [FastDiffHelper]::MergeValues($uVals, $mMode, $sep, $opts.Trim)
+
+                        $isEqualOverall = [FastDiffHelper]::AreEqual($bMerged, $uMerged, $opts.IgnoreCase, $opts.Trim, $opts.IgnoreSpecialChars, $opts.IgnoreAllSpaces)
+                        if ($isEqualOverall) {
+                            continue
+                        }
+                    }
+
+                    foreach ($baseCol in $bCols) {
                         if ($MetadataColumns -contains $baseCol) { continue }
                         $bVal = if ($matched.Values.ContainsKey($baseCol) -and $null -ne $matched.Values[$baseCol]) { $matched.Values[$baseCol].ToString() } else { '' }
                         $uVal = if ($projected.ContainsKey($baseCol) -and $null -ne $projected[$baseCol]) { $projected[$baseCol].ToString() } else { '' }
@@ -4180,6 +4211,7 @@ function Show-MasterUpdater {
                             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                 <Button x:Name="btnAutoMap" Content="⚡ Automatyczne mapowanie" Background="{DynamicResource AccentBlue}" Foreground="#FFFFFF" FontWeight="SemiBold" BorderThickness="0" Margin="0,0,8,0"/>
                                 <Button x:Name="btnAddRule" Content="+ Dodaj regułę" Margin="0,0,8,0"/>
+                                <Button x:Name="btnEditRule" Content="Edytuj regułę" Margin="0,0,8,0"/>
                                 <Button x:Name="btnRemoveRule" Content="Usuń regułę" Margin="0,0,8,0"/>
                                 <Button x:Name="btnSaveProfile" Content="Zapisz profil"/>
                             </StackPanel>
@@ -4652,6 +4684,7 @@ function Show-MasterUpdater {
     $tabReview          = $window.FindName('tabReview')
     $btnAutoMap         = $window.FindName('btnAutoMap')
     $btnAddRule         = $window.FindName('btnAddRule')
+    $btnEditRule        = $window.FindName('btnEditRule')
     $btnRemoveRule      = $window.FindName('btnRemoveRule')
     $btnSaveProfile     = $window.FindName('btnSaveProfile')
     $script:txtSearchMapping = $window.FindName('txtSearchMapping')
@@ -4905,7 +4938,7 @@ function Show-MasterUpdater {
         $secButtons = @(
             $btnBrowseBase, $btnBrowseIncoming, $btnThemeToggle, $btnSettings,
             $btnRestoreBackup, $btnOpenBackups, $btnOpenLogs, $btnHelp,
-            $btnAddRule, $btnRemoveRule, $btnSaveProfile,
+            $btnAddRule, $btnEditRule, $btnRemoveRule, $btnSaveProfile,
             $btnRefreshPreview, $btnPrevSampleRow, $btnNextSampleRow,
             $btnBackRow, $btnSkipRow, $btnExportReport, $btnUndo
         )
@@ -5002,6 +5035,7 @@ function Show-MasterUpdater {
         $tabMapping.Header          = Get-UiString 'TabMapping'
         $btnAutoMap.Content         = Get-UiString 'BtnAutoMap'
         $btnAddRule.Content         = Get-UiString 'BtnAddRule'
+        if ($btnEditRule)           { $btnEditRule.Content = Get-UiString 'BtnEditRule' }
         $btnRemoveRule.Content      = Get-UiString 'BtnRemoveRule'
         $btnSaveProfile.Content     = Get-UiString 'BtnSaveProfile'
         $colBase.Header             = Get-UiString 'ColBase'
@@ -5056,6 +5090,7 @@ function Show-MasterUpdater {
         if ($cmbIncomingSheet)      { $cmbIncomingSheet.ToolTip = Get-UiString 'TooltipCmbIncomingSheet' }
         if ($btnAutoMap)            { $btnAutoMap.ToolTip = Get-UiString 'TooltipAutoMap' }
         if ($btnAddRule)            { $btnAddRule.ToolTip = Get-UiString 'TooltipAddRule' }
+        if ($btnEditRule)           { $btnEditRule.ToolTip = Get-UiString 'TooltipEditRule' }
         if ($btnRemoveRule)         { $btnRemoveRule.ToolTip = Get-UiString 'TooltipRemoveRule' }
         if ($btnSaveProfile)        { $btnSaveProfile.ToolTip = Get-UiString 'TooltipSaveProfile' }
         if ($lbJoinBase)            { $lbJoinBase.ToolTip = Get-UiString 'TooltipJoinBase' }
@@ -5831,8 +5866,10 @@ function Show-MasterUpdater {
         & $script:UpdateDataMappingPreview
     })
 
-    # Add Rule Button (Interactive Dialog)
-    $btnAddRule.add_Click({
+    # Rule Editor Dialog (Supports Multi-Select ListBoxes, Concatenate with Separator, and Live Preview)
+    $ShowRuleDialog = {
+        param([object]$ExistingRule = $null)
+
         if (-not $script:BaseHeaders -or $script:BaseHeaders.Count -eq 0 -or -not $script:IncomingHeaders -or $script:IncomingHeaders.Count -eq 0) {
             $msg = Get-UiString 'ErrLoadFilesBeforeRule'
             $txtStatusMsg.Text = $msg
@@ -5842,15 +5879,17 @@ function Show-MasterUpdater {
 
         $p = Get-UpdaterThemePalette $script:CurrentTheme
         $ruleWin = New-Object System.Windows.Window -Property @{
-            Title = Get-UiString 'BtnAddRule'
-            Width = 460
-            Height = 420
+            Title                 = if ($ExistingRule) { Get-UiString 'EditRuleTitle' } else { Get-UiString 'AddRuleTitle' }
+            Width                 = 620
+            Height                = 560
+            MinWidth              = 520
+            MinHeight             = 480
             WindowStartupLocation = [System.Windows.WindowStartupLocation]::CenterOwner
-            Owner = $window
-            Background = $script:BrushConverter.ConvertFromString($p.BgCard)
-            Foreground = $script:BrushConverter.ConvertFromString($p.TextPrimary)
-            FontFamily = New-Object System.Windows.Media.FontFamily('Segoe UI')
-            FontSize = 13
+            Owner                 = $window
+            Background            = $script:BrushConverter.ConvertFromString($p.BgCard)
+            Foreground            = $script:BrushConverter.ConvertFromString($p.TextPrimary)
+            FontFamily            = New-Object System.Windows.Media.FontFamily('Segoe UI')
+            FontSize              = 13
         }
         $ruleHwnd = (New-Object System.Windows.Interop.WindowInteropHelper($ruleWin)).EnsureHandle()
         Set-WindowDwmTheme -Hwnd $ruleHwnd -IsDark $p.IsDark
@@ -5858,64 +5897,294 @@ function Show-MasterUpdater {
             foreach ($k in $window.Resources.Keys) { if ($null -ne $window.Resources[$k]) { $ruleWin.Resources[$k] = $window.Resources[$k] } }
         }
 
-        $sp = New-Object System.Windows.Controls.StackPanel -Property @{ Margin = New-Object System.Windows.Thickness(20) }
+        $mainGrid = New-Object System.Windows.Controls.Grid -Property @{ Margin = New-Object System.Windows.Thickness(18) }
+        $mainGrid.RowDefinitions.Add((New-Object System.Windows.Controls.RowDefinition -Property @{ Height = [System.Windows.GridLength]::Auto }))
+        $mainGrid.RowDefinitions.Add((New-Object System.Windows.Controls.RowDefinition -Property @{ Height = [System.Windows.GridLength]::new(1, [System.Windows.GridUnitType]::Star) }))
+        $mainGrid.RowDefinitions.Add((New-Object System.Windows.Controls.RowDefinition -Property @{ Height = [System.Windows.GridLength]::Auto }))
+        $mainGrid.RowDefinitions.Add((New-Object System.Windows.Controls.RowDefinition -Property @{ Height = [System.Windows.GridLength]::Auto }))
+        $mainGrid.RowDefinitions.Add((New-Object System.Windows.Controls.RowDefinition -Property @{ Height = [System.Windows.GridLength]::Auto }))
 
-        # Base column
-        $lblB = New-Object System.Windows.Controls.TextBlock -Property @{ Text = Get-UiString 'ColBase'; Foreground = $script:BrushConverter.ConvertFromString($p.TextSecondary); Margin = New-Object System.Windows.Thickness(0, 0, 0, 4) }
-        $cmbB = New-Object System.Windows.Controls.ComboBox -Property @{ Background = $script:BrushConverter.ConvertFromString($p.BgInput); Foreground = $script:BrushConverter.ConvertFromString($p.TextPrimary); BorderBrush = $script:BrushConverter.ConvertFromString($p.BorderInput); Margin = New-Object System.Windows.Thickness(0, 0, 0, 10) }
-        foreach ($h in $script:BaseHeaders) { [void]$cmbB.Items.Add($h) }
-        if ($cmbB.Items.Count -gt 0) { $cmbB.SelectedIndex = 0 }
-        [void]$sp.Children.Add($lblB); [void]$sp.Children.Add($cmbB)
+        # Row 0: Hint banner
+        $txtHint = New-Object System.Windows.Controls.TextBlock -Property @{
+            Text         = Get-UiString 'RuleMultiSelectHint'
+            Foreground   = $script:BrushConverter.ConvertFromString($p.TextSecondary)
+            FontSize     = 11
+            Margin       = New-Object System.Windows.Thickness(0, 0, 0, 10)
+            TextWrapping = [System.Windows.TextWrapping]::Wrap
+        }
+        [System.Windows.Controls.Grid]::SetRow($txtHint, 0)
+        [void]$mainGrid.Children.Add($txtHint)
 
-        # Incoming column
-        $lblU = New-Object System.Windows.Controls.TextBlock -Property @{ Text = Get-UiString 'ColIncoming'; Foreground = $script:BrushConverter.ConvertFromString($p.TextSecondary); Margin = New-Object System.Windows.Thickness(0, 0, 0, 4) }
-        $cmbU = New-Object System.Windows.Controls.ComboBox -Property @{ Background = $script:BrushConverter.ConvertFromString($p.BgInput); Foreground = $script:BrushConverter.ConvertFromString($p.TextPrimary); BorderBrush = $script:BrushConverter.ConvertFromString($p.BorderInput); Margin = New-Object System.Windows.Thickness(0, 0, 0, 10) }
-        foreach ($h in $script:IncomingHeaders) { [void]$cmbU.Items.Add($h) }
-        if ($cmbU.Items.Count -gt 0) { $cmbU.SelectedIndex = 0 }
-        [void]$sp.Children.Add($lblU); [void]$sp.Children.Add($cmbU)
+        # Row 1: Columns ListBoxes Grid
+        $colsGrid = New-Object System.Windows.Controls.Grid
+        $colsGrid.ColumnDefinitions.Add((New-Object System.Windows.Controls.ColumnDefinition -Property @{ Width = [System.Windows.GridLength]::new(1, [System.Windows.GridUnitType]::Star) }))
+        $colsGrid.ColumnDefinitions.Add((New-Object System.Windows.Controls.ColumnDefinition -Property @{ Width = [System.Windows.GridLength]::new(14, [System.Windows.GridUnitType]::Pixel) }))
+        $colsGrid.ColumnDefinitions.Add((New-Object System.Windows.Controls.ColumnDefinition -Property @{ Width = [System.Windows.GridLength]::new(1, [System.Windows.GridUnitType]::Star) }))
 
-        # Merge Mode
-        $lblM = New-Object System.Windows.Controls.TextBlock -Property @{ Text = Get-UiString 'ColMergeMode'; Foreground = $script:BrushConverter.ConvertFromString($p.TextSecondary); Margin = New-Object System.Windows.Thickness(0, 0, 0, 4) }
-        $cmbM = New-Object System.Windows.Controls.ComboBox -Property @{ Background = $script:BrushConverter.ConvertFromString($p.BgInput); Foreground = $script:BrushConverter.ConvertFromString($p.TextPrimary); BorderBrush = $script:BrushConverter.ConvertFromString($p.BorderInput); Margin = New-Object System.Windows.Thickness(0, 0, 0, 10) }
-        [void]$cmbM.Items.Add('Exact'); [void]$cmbM.Items.Add('FirstNonEmpty'); [void]$cmbM.Items.Add('Concatenate')
+        # Left: Base columns
+        $spBase = New-Object System.Windows.Controls.Grid
+        $spBase.RowDefinitions.Add((New-Object System.Windows.Controls.RowDefinition -Property @{ Height = [System.Windows.GridLength]::Auto }))
+        $spBase.RowDefinitions.Add((New-Object System.Windows.Controls.RowDefinition -Property @{ Height = [System.Windows.GridLength]::new(1, [System.Windows.GridUnitType]::Star) }))
+        $lblB = New-Object System.Windows.Controls.TextBlock -Property @{
+            Text       = Get-UiString 'ColBase'
+            Foreground = $script:BrushConverter.ConvertFromString($p.TextPrimary)
+            FontWeight = [System.Windows.FontWeights]::SemiBold
+            Margin     = New-Object System.Windows.Thickness(0, 0, 0, 6)
+        }
+        $lbBase = New-Object System.Windows.Controls.ListBox -Property @{
+            Background    = $script:BrushConverter.ConvertFromString($p.BgInput)
+            Foreground    = $script:BrushConverter.ConvertFromString($p.TextPrimary)
+            BorderBrush   = $script:BrushConverter.ConvertFromString($p.BorderInput)
+            SelectionMode = [System.Windows.Controls.SelectionMode]::Extended
+        }
+        foreach ($h in $script:BaseHeaders) { [void]$lbBase.Items.Add($h) }
+        [System.Windows.Controls.Grid]::SetRow($lblB, 0)
+        [System.Windows.Controls.Grid]::SetRow($lbBase, 1)
+        [void]$spBase.Children.Add($lblB)
+        [void]$spBase.Children.Add($lbBase)
+        [System.Windows.Controls.Grid]::SetColumn($spBase, 0)
+        [void]$colsGrid.Children.Add($spBase)
+
+        # Right: Incoming columns
+        $spUpd = New-Object System.Windows.Controls.Grid
+        $spUpd.RowDefinitions.Add((New-Object System.Windows.Controls.RowDefinition -Property @{ Height = [System.Windows.GridLength]::Auto }))
+        $spUpd.RowDefinitions.Add((New-Object System.Windows.Controls.RowDefinition -Property @{ Height = [System.Windows.GridLength]::new(1, [System.Windows.GridUnitType]::Star) }))
+        $lblU = New-Object System.Windows.Controls.TextBlock -Property @{
+            Text       = Get-UiString 'ColIncoming'
+            Foreground = $script:BrushConverter.ConvertFromString($p.TextPrimary)
+            FontWeight = [System.Windows.FontWeights]::SemiBold
+            Margin     = New-Object System.Windows.Thickness(0, 0, 0, 6)
+        }
+        $lbUpd = New-Object System.Windows.Controls.ListBox -Property @{
+            Background    = $script:BrushConverter.ConvertFromString($p.BgInput)
+            Foreground    = $script:BrushConverter.ConvertFromString($p.TextPrimary)
+            BorderBrush   = $script:BrushConverter.ConvertFromString($p.BorderInput)
+            SelectionMode = [System.Windows.Controls.SelectionMode]::Extended
+        }
+        foreach ($h in $script:IncomingHeaders) { [void]$lbUpd.Items.Add($h) }
+        [System.Windows.Controls.Grid]::SetRow($lblU, 0)
+        [System.Windows.Controls.Grid]::SetRow($lbUpd, 1)
+        [void]$spUpd.Children.Add($lblU)
+        [void]$spUpd.Children.Add($lbUpd)
+        [System.Windows.Controls.Grid]::SetColumn($spUpd, 2)
+        [void]$colsGrid.Children.Add($spUpd)
+
+        [System.Windows.Controls.Grid]::SetRow($colsGrid, 1)
+        [void]$mainGrid.Children.Add($colsGrid)
+
+        # Row 2: Merge Mode and Separator controls
+        $modeGrid = New-Object System.Windows.Controls.Grid -Property @{ Margin = New-Object System.Windows.Thickness(0, 10, 0, 10) }
+        $modeGrid.ColumnDefinitions.Add((New-Object System.Windows.Controls.ColumnDefinition -Property @{ Width = [System.Windows.GridLength]::new(1, [System.Windows.GridUnitType]::Star) }))
+        $modeGrid.ColumnDefinitions.Add((New-Object System.Windows.Controls.ColumnDefinition -Property @{ Width = [System.Windows.GridLength]::new(14, [System.Windows.GridUnitType]::Pixel) }))
+        $modeGrid.ColumnDefinitions.Add((New-Object System.Windows.Controls.ColumnDefinition -Property @{ Width = [System.Windows.GridLength]::new(1, [System.Windows.GridUnitType]::Star) }))
+
+        $spMode = New-Object System.Windows.Controls.StackPanel
+        $lblM = New-Object System.Windows.Controls.TextBlock -Property @{
+            Text       = Get-UiString 'ColMergeMode'
+            Foreground = $script:BrushConverter.ConvertFromString($p.TextSecondary)
+            Margin     = New-Object System.Windows.Thickness(0, 0, 0, 4)
+        }
+        $cmbM = New-Object System.Windows.Controls.ComboBox -Property @{
+            Background  = $script:BrushConverter.ConvertFromString($p.BgInput)
+            Foreground  = $script:BrushConverter.ConvertFromString($p.TextPrimary)
+            BorderBrush = $script:BrushConverter.ConvertFromString($p.BorderInput)
+        }
+        [void]$cmbM.Items.Add('Exact'); [void]$cmbM.Items.Add('Concatenate'); [void]$cmbM.Items.Add('FirstNonEmpty')
         $cmbM.SelectedIndex = 0
-        [void]$sp.Children.Add($lblM); [void]$sp.Children.Add($cmbM)
+        [void]$spMode.Children.Add($lblM); [void]$spMode.Children.Add($cmbM)
+        [System.Windows.Controls.Grid]::SetColumn($spMode, 0)
+        [void]$modeGrid.Children.Add($spMode)
 
-        # Separator
-        $lblS = New-Object System.Windows.Controls.TextBlock -Property @{ Text = Get-UiString 'ColSeparator'; Foreground = $script:BrushConverter.ConvertFromString($p.TextSecondary); Margin = New-Object System.Windows.Thickness(0, 0, 0, 4) }
-        $txtS = New-Object System.Windows.Controls.TextBox -Property @{ Background = $script:BrushConverter.ConvertFromString($p.BgInput); Foreground = $script:BrushConverter.ConvertFromString($p.TextPrimary); BorderBrush = $script:BrushConverter.ConvertFromString($p.BorderInput); Padding = New-Object System.Windows.Thickness(6, 4, 6, 4); Margin = New-Object System.Windows.Thickness(0, 0, 0, 14) }
-        [void]$sp.Children.Add($lblS); [void]$sp.Children.Add($txtS)
+        $spSep = New-Object System.Windows.Controls.StackPanel
+        $lblS = New-Object System.Windows.Controls.TextBlock -Property @{
+            Text       = Get-UiString 'ColSeparator'
+            Foreground = $script:BrushConverter.ConvertFromString($p.TextSecondary)
+            Margin     = New-Object System.Windows.Thickness(0, 0, 0, 4)
+        }
+        $txtS = New-Object System.Windows.Controls.TextBox -Property @{
+            Background  = $script:BrushConverter.ConvertFromString($p.BgInput)
+            Foreground  = $script:BrushConverter.ConvertFromString($p.TextPrimary)
+            BorderBrush = $script:BrushConverter.ConvertFromString($p.BorderInput)
+            Padding     = New-Object System.Windows.Thickness(6, 4, 6, 4)
+            Text        = ', '
+        }
+        [void]$spSep.Children.Add($lblS); [void]$spSep.Children.Add($txtS)
+        [System.Windows.Controls.Grid]::SetColumn($spSep, 2)
+        [void]$modeGrid.Children.Add($spSep)
 
-        # Buttons
-        $btnSp = New-Object System.Windows.Controls.StackPanel -Property @{ Orientation = [System.Windows.Controls.Orientation]::Horizontal; HorizontalAlignment = [System.Windows.HorizontalAlignment]::Right }
-        $btnSave = New-Object System.Windows.Controls.Button -Property @{ Content = Get-UiString 'SettingsBtnSave'; Background = $script:BrushConverter.ConvertFromString($p.AccentBlue); Foreground = $script:BrushConverter.ConvertFromString('#FFFFFF'); FontWeight = [System.Windows.FontWeights]::Bold; Padding = New-Object System.Windows.Thickness(14, 6, 14, 6); Margin = New-Object System.Windows.Thickness(0, 0, 8, 0) }
-        $btnCancel = New-Object System.Windows.Controls.Button -Property @{ Content = Get-UiString 'SettingsBtnCancel'; Background = $script:BrushConverter.ConvertFromString($p.BtnSecondaryBg); Foreground = $script:BrushConverter.ConvertFromString($p.BtnSecondaryFg); BorderBrush = $script:BrushConverter.ConvertFromString($p.BorderCard); BorderThickness = [System.Windows.Thickness]::new(1); Padding = New-Object System.Windows.Thickness(14, 6, 14, 6) }
+        [System.Windows.Controls.Grid]::SetRow($modeGrid, 2)
+        [void]$mainGrid.Children.Add($modeGrid)
 
-        $btnSave.add_Click({
-            $bSel = if ($cmbB.SelectedItem) { $cmbB.SelectedItem.ToString() } else { '' }
-            $uSel = if ($cmbU.SelectedItem) { $cmbU.SelectedItem.ToString() } else { '' }
+        # Row 3: Live Preview Box
+        $borderPreview = New-Object System.Windows.Controls.Border -Property @{
+            Background      = $script:BrushConverter.ConvertFromString($p.BgInput)
+            BorderBrush     = $script:BrushConverter.ConvertFromString($p.BorderCard)
+            BorderThickness = [System.Windows.Thickness]::new(1)
+            CornerRadius    = [System.Windows.CornerRadius]::new(6)
+            Padding         = New-Object System.Windows.Thickness(10)
+            Margin          = New-Object System.Windows.Thickness(0, 0, 0, 14)
+        }
+        $spPreviewContent = New-Object System.Windows.Controls.StackPanel
+        $lblPreviewTitle = New-Object System.Windows.Controls.TextBlock -Property @{
+            Text       = Get-UiString 'RulePreviewTitle'
+            Foreground = $script:BrushConverter.ConvertFromString($p.TextSecondary)
+            FontSize   = 11
+            FontWeight = [System.Windows.FontWeights]::SemiBold
+            Margin     = New-Object System.Windows.Thickness(0, 0, 0, 4)
+        }
+        $txtPreviewText = New-Object System.Windows.Controls.TextBlock -Property @{
+            Foreground   = $script:BrushConverter.ConvertFromString($p.TextPrimary)
+            FontFamily   = New-Object System.Windows.Media.FontFamily('Consolas, Segoe UI')
+            FontSize     = 12
+            TextWrapping = [System.Windows.TextWrapping]::Wrap
+        }
+        [void]$spPreviewContent.Children.Add($lblPreviewTitle)
+        [void]$spPreviewContent.Children.Add($txtPreviewText)
+        $borderPreview.Child = $spPreviewContent
+
+        [System.Windows.Controls.Grid]::SetRow($borderPreview, 3)
+        [void]$mainGrid.Children.Add($borderPreview)
+
+        # Row 4: Buttons
+        $btnSp = New-Object System.Windows.Controls.StackPanel -Property @{
+            Orientation         = [System.Windows.Controls.Orientation]::Horizontal
+            HorizontalAlignment = [System.Windows.HorizontalAlignment]::Right
+        }
+        $btnSave = New-Object System.Windows.Controls.Button -Property @{
+            Content    = Get-UiString 'SettingsBtnSave'
+            Background = $script:BrushConverter.ConvertFromString($p.AccentBlue)
+            Foreground = $script:BrushConverter.ConvertFromString('#FFFFFF')
+            FontWeight = [System.Windows.FontWeights]::Bold
+            Padding    = New-Object System.Windows.Thickness(16, 6, 16, 6)
+            Margin     = New-Object System.Windows.Thickness(0, 0, 8, 0)
+            Cursor     = [System.Windows.Input.Cursors]::Hand
+        }
+        $btnCancel = New-Object System.Windows.Controls.Button -Property @{
+            Content         = Get-UiString 'SettingsBtnCancel'
+            Background      = $script:BrushConverter.ConvertFromString($p.BtnSecondaryBg)
+            Foreground      = $script:BrushConverter.ConvertFromString($p.BtnSecondaryFg)
+            BorderBrush     = $script:BrushConverter.ConvertFromString($p.BorderCard)
+            BorderThickness = [System.Windows.Thickness]::new(1)
+            Padding         = New-Object System.Windows.Thickness(14, 6, 14, 6)
+            Cursor          = [System.Windows.Input.Cursors]::Hand
+        }
+        [void]$btnSp.Children.Add($btnSave); [void]$btnSp.Children.Add($btnCancel)
+        [System.Windows.Controls.Grid]::SetRow($btnSp, 4)
+        [void]$mainGrid.Children.Add($btnSp)
+
+        # Update Preview handler
+        $UpdatePreview = {
+            $bSel = @($lbBase.SelectedItems)
+            $uSel = @($lbUpd.SelectedItems)
             $mSel = if ($cmbM.SelectedItem) { $cmbM.SelectedItem.ToString() } else { 'Exact' }
             $sVal = $txtS.Text
 
-            if (-not [string]::IsNullOrEmpty($bSel) -and -not [string]::IsNullOrEmpty($uSel)) {
+            $bStr = if ($bSel.Count -gt 0) {
+                if ($mSel -eq 'Concatenate' -and $sVal) { $bSel -join " $($sVal.Trim()) " } else { $bSel -join ', ' }
+            } else { '(brak / none)' }
+
+            $uStr = if ($uSel.Count -gt 0) {
+                if ($mSel -eq 'Concatenate' -and $sVal) { $uSel -join " $($sVal.Trim()) " } else { $uSel -join ', ' }
+            } else { '(brak / none)' }
+
+            $modeExtra = if ($mSel -eq 'Concatenate') { " (Separator: '$sVal')" } else { "" }
+            $txtPreviewText.Text = "Base:   $bStr`nUpdate: $uStr`nMode:   $mSel$modeExtra"
+        }
+
+        $lbBase.add_SelectionChanged({ & $UpdatePreview })
+        $lbUpd.add_SelectionChanged({ & $UpdatePreview })
+        $cmbM.add_SelectionChanged({
+            $isConcat = ($cmbM.SelectedItem -and $cmbM.SelectedItem.ToString() -eq 'Concatenate')
+            if ($isConcat -and [string]::IsNullOrEmpty($txtS.Text)) { $txtS.Text = ', ' }
+            & $UpdatePreview
+        })
+        $txtS.add_TextChanged({ & $UpdatePreview })
+
+        # Pre-populate if ExistingRule
+        if ($ExistingRule) {
+            $exBCols = if ($ExistingRule.BaseColumns) { @($ExistingRule.BaseColumns) } else { @() }
+            $exUCols = if ($ExistingRule.UpdateColumns) { @($ExistingRule.UpdateColumns) } else { @() }
+            foreach ($c in $exBCols) {
+                if ($lbBase.Items.Contains($c)) { [void]$lbBase.SelectedItems.Add($c) }
+            }
+            foreach ($c in $exUCols) {
+                if ($lbUpd.Items.Contains($c)) { [void]$lbUpd.SelectedItems.Add($c) }
+            }
+            $mi = @('Exact', 'Concatenate', 'FirstNonEmpty').IndexOf($ExistingRule.MergeMode)
+            if ($mi -ge 0) { $cmbM.SelectedIndex = $mi }
+            $txtS.Text = if ($null -ne $ExistingRule.Separator) { $ExistingRule.Separator } else { '' }
+        } else {
+            if ($lbBase.Items.Count -gt 0) { $lbBase.SelectedIndex = 0 }
+            if ($lbUpd.Items.Count -gt 0) { $lbUpd.SelectedIndex = 0 }
+        }
+        & $UpdatePreview
+
+        # Save action
+        $btnSave.add_Click({
+            $bSel = @($lbBase.SelectedItems)
+            $uSel = @($lbUpd.SelectedItems)
+            if ($bSel.Count -eq 0 -or $uSel.Count -eq 0) {
+                $msg = Get-UiString 'ErrSelectAtLeastOneCol'
+                [System.Windows.Forms.MessageBox]::Show($msg, (Get-UiString 'WarningTitle'), [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+                return
+            }
+
+            $bColsArr = [string[]]@($bSel | ForEach-Object { $_.ToString() })
+            $uColsArr = [string[]]@($uSel | ForEach-Object { $_.ToString() })
+            $mModeVal = if ($cmbM.SelectedItem) { $cmbM.SelectedItem.ToString() } else { 'Exact' }
+            $sepVal   = $txtS.Text
+
+            if ($ExistingRule) {
+                $ExistingRule.BaseColumns   = $bColsArr
+                $ExistingRule.UpdateColumns = $uColsArr
+                $ExistingRule.MergeMode     = $mModeVal
+                $ExistingRule.Separator     = $sepVal
+                $ExistingRule.BaseColsStr   = ($bColsArr -join ', ')
+                $ExistingRule.UpdColsStr    = ($uColsArr -join ', ')
+                $gridMappingRules.Items.Refresh()
+            } else {
                 $script:MappingRules.Add([PSCustomObject]@{
-                    BaseColumns   = @($bSel)
-                    UpdateColumns = @($uSel)
-                    MergeMode     = $mSel
-                    Separator     = $sVal
-                    BaseColsStr   = $bSel
-                    UpdColsStr    = $uSel
+                    BaseColumns   = $bColsArr
+                    UpdateColumns = $uColsArr
+                    MergeMode     = $mModeVal
+                    Separator     = $sepVal
+                    BaseColsStr   = ($bColsArr -join ', ')
+                    UpdColsStr    = ($uColsArr -join ', ')
                 })
             }
             $ruleWin.Close()
+            & $script:UpdateDataMappingPreview
         })
+
         $btnCancel.add_Click({ $ruleWin.Close() })
 
-        [void]$btnSp.Children.Add($btnSave); [void]$btnSp.Children.Add($btnCancel)
-        [void]$sp.Children.Add($btnSp)
-        $ruleWin.Content = $sp
+        $ruleWin.Content = $mainGrid
         [void]$ruleWin.ShowDialog()
-        & $script:UpdateDataMappingPreview
+    }
+
+    # Add Rule Button
+    $btnAddRule.add_Click({
+        & $ShowRuleDialog
+    })
+
+    # Edit Rule Button
+    if ($btnEditRule) {
+        $btnEditRule.add_Click({
+            $sel = if ($gridMappingRules.SelectedItem) { $gridMappingRules.SelectedItem } else { $null }
+            if ($sel) {
+                & $ShowRuleDialog -ExistingRule $sel
+            } else {
+                $msg = Get-UiString 'ErrSelectRuleToEdit'
+                [System.Windows.Forms.MessageBox]::Show($msg, (Get-UiString 'WarningTitle'), [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+            }
+        })
+    }
+
+    # Double-click on Mapping Rules DataGrid to Edit Rule
+    $gridMappingRules.add_MouseDoubleClick({
+        if ($gridMappingRules.SelectedItem) {
+            & $ShowRuleDialog -ExistingRule $gridMappingRules.SelectedItem
+        }
     })
 
     # Remove Rule Button
