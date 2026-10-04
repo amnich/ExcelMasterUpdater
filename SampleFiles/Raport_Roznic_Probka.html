@@ -1,0 +1,204 @@
+﻿<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Excel Master Updater - Review & Diff Report</title>
+  <style>
+    :root { --bg: #0F172A; --card: #1E293B; --border: #334155; --text: #F8FAFC; --text-muted: #94A3B8; --green: #10B981; --amber: #F59E0B; --red: #EF4444; --blue: #3B82F6; }
+    body { margin: 0; padding: 24px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: var(--bg); color: var(--text); line-height: 1.5; }
+    .container { max-width: 1300px; margin: 0 auto; }
+    header { padding-bottom: 20px; border-bottom: 1px solid var(--border); margin-bottom: 24px; }
+    h1 { margin: 0 0 8px 0; font-size: 24px; font-weight: 700; color: #FFFFFF; }
+    .meta { font-size: 13px; color: var(--text-muted); }
+    .meta span { margin-right: 20px; display: inline-block; margin-bottom: 4px; }
+    .kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin-bottom: 28px; }
+    .kpi-card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 14px 18px; }
+    .kpi-card .num { font-size: 28px; font-weight: 800; line-height: 1.1; margin-bottom: 4px; }
+    .kpi-card .lbl { font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); }
+    .kpi-new .num { color: #34D399; }
+    .kpi-chg .num { color: #FBBF24; }
+    .kpi-amb .num { color: #F87171; }
+    .kpi-acc .num { color: #60A5FA; }
+    .section-title { font-size: 18px; font-weight: 600; margin: 24px 0 12px 0; }
+    table { width: 100%; border-collapse: collapse; background: var(--card); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; font-size: 13px; }
+    th { background: #162032; text-align: left; padding: 10px 14px; font-size: 12px; text-transform: uppercase; color: var(--text-muted); border-bottom: 1px solid var(--border); }
+    td { padding: 10px 14px; border-bottom: 1px solid #233146; vertical-align: top; }
+    tr:last-child td { border-bottom: none; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 700; text-transform: uppercase; }
+    .b-new { background: #064E3B; color: #A7F3D0; }
+    .b-chg { background: #713F12; color: #FDE68A; }
+    .b-amb { background: #7F1D1D; color: #FECACA; }
+    .b-rem { background: #881337; color: #FECDD3; }
+    .b-unch { background: #1E293B; color: #94A3B8; border: 1px solid #334155; }
+    footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid var(--border); font-size: 12px; color: var(--text-muted); text-align: center; }
+    @media print { body { background: #FFF; color: #000; } .kpi-card, table { border-color: #CCC; background: #FFF; color: #000; } th { background: #EEE; color: #000; } }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Excel Master Updater &mdash; Raport Przeglądu i Różnic</h1>
+      <div class="meta"><span><b>Data:</b> 2026-10-03 17:43:09</span><span><b>Plik Bazy:</b> .\SampleFiles\Baza_Uczniowie_Dowoz.xlsx</span><span><b>Plik Wejściowy:</b> .\SampleFiles\Zmiany_Wrzesien_2026.xlsx</span></div>
+    </header>
+    <div class="kpi-grid">
+      <div class="kpi-card"><div class="num">16</div><div class="lbl">Wszystkie wiersze</div></div>
+      <div class="kpi-card kpi-new"><div class="num">2</div><div class="lbl">Nowe rekordy</div></div>
+      <div class="kpi-card kpi-chg"><div class="num">4</div><div class="lbl">Zmienione</div></div>
+      <div class="kpi-card kpi-amb"><div class="num">0</div><div class="lbl">Niejednoznaczne</div></div>
+      <div class="kpi-card kpi-acc"><div class="num">0</div><div class="lbl">Zaakceptowane</div></div>
+    </div>
+    <div class="section-title">Szczegóły elementów przeglądu</div>
+    <table>
+      <thead><tr><th>#</th><th>Status</th><th>Decyzja</th><th>Identyfikator</th><th>Wiersz Bazy</th><th>Wiersz Źródła</th><th>Podsumowanie Różnic</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>1</td>
+          <td><span class="badge b-unch">Unchanged</span></td>
+          <td>Pending</td>
+          <td><b>Kowalski Jan</b></td>
+          <td>2</td>
+          <td>2</td>
+          <td><span style='color:#94A3B8;'>Brak zmian</span></td>
+        </tr>
+        <tr>
+          <td>2</td>
+          <td><span class="badge b-unch">Unchanged</span></td>
+          <td>Pending</td>
+          <td><b>Nowak Piotr</b></td>
+          <td>3</td>
+          <td>3</td>
+          <td><span style='color:#94A3B8;'>Brak zmian</span></td>
+        </tr>
+        <tr>
+          <td>3</td>
+          <td><span class="badge b-unch">Unchanged</span></td>
+          <td>Pending</td>
+          <td><b>Wiśniewska Zuzanna</b></td>
+          <td>4</td>
+          <td>4</td>
+          <td><span style='color:#94A3B8;'>Brak zmian</span></td>
+        </tr>
+        <tr>
+          <td>4</td>
+          <td><span class="badge b-chg">Changed</span></td>
+          <td>Pending</td>
+          <td><b>W&#243;jcik Michał</b></td>
+          <td>5</td>
+          <td>5</td>
+          <td>Rodzaj dowozu: &#39;Gminny bus szkolny (Trasa 1)&#39; -&gt; &#39;Własny transport rodzica&#39;; Telefon: &#39;604-567-890&#39; -&gt; &#39;501-999-111&#39;; Łączenie dowozu z pracą: &#39;Nie&#39; -&gt; &#39;Tak&#39;; Samoch&#243;d: &#39;&#39; -&gt; &#39;Toyota&#39;; Model: &#39;&#39; -&gt; &#39;RAV4&#39;; Pojemność: &#39;&#39; -&gt; &#39;2487 cm&#179;&#39;; Uwagi: &#39;Przystanek: Polna/Gł&#243;wna&#39; -&gt; &#39;Zmiana na dow&#243;z własny od 01.09.2026&#39;</td>
+        </tr>
+        <tr>
+          <td>5</td>
+          <td><span class="badge b-unch">Unchanged</span></td>
+          <td>Pending</td>
+          <td><b>Kamińska Julia</b></td>
+          <td>6</td>
+          <td>6</td>
+          <td><span style='color:#94A3B8;'>Brak zmian</span></td>
+        </tr>
+        <tr>
+          <td>6</td>
+          <td><span class="badge b-chg">Changed</span></td>
+          <td>Pending</td>
+          <td><b>Lewandowski Aleksander</b></td>
+          <td>7</td>
+          <td>7</td>
+          <td>Samoch&#243;d: &#39;Opel&#39; -&gt; &#39;Dacia&#39;; Model: &#39;Astra&#39; -&gt; &#39;Jogger&#39;; Pojemność: &#39;1364 cm&#179;&#39; -&gt; &#39;999 cm&#179;&#39;; Uwagi: &#39;Wymaga asystenta ucznia&#39; -&gt; &#39;Wymaga asystenta ucznia (potwierdzone orzeczenie 2026/27)&#39;</td>
+        </tr>
+        <tr>
+          <td>7</td>
+          <td><span class="badge b-unch">Unchanged</span></td>
+          <td>Pending</td>
+          <td><b>Zielińska Maja</b></td>
+          <td>8</td>
+          <td>8</td>
+          <td><span style='color:#94A3B8;'>Brak zmian</span></td>
+        </tr>
+        <tr>
+          <td>8</td>
+          <td><span class="badge b-unch">Unchanged</span></td>
+          <td>Pending</td>
+          <td><b>Szymański Bartosz</b></td>
+          <td>9</td>
+          <td>9</td>
+          <td><span style='color:#94A3B8;'>Brak zmian</span></td>
+        </tr>
+        <tr>
+          <td>9</td>
+          <td><span class="badge b-unch">Unchanged</span></td>
+          <td>Pending</td>
+          <td><b>Woźniak Filip</b></td>
+          <td>10</td>
+          <td>10</td>
+          <td><span style='color:#94A3B8;'>Brak zmian</span></td>
+        </tr>
+        <tr>
+          <td>10</td>
+          <td><span class="badge b-unch">Unchanged</span></td>
+          <td>Pending</td>
+          <td><b>Dąbrowski Adam</b></td>
+          <td>11</td>
+          <td>11</td>
+          <td><span style='color:#94A3B8;'>Brak zmian</span></td>
+        </tr>
+        <tr>
+          <td>11</td>
+          <td><span class="badge b-chg">Changed</span></td>
+          <td>Pending</td>
+          <td><b>Kozłowska Alicja</b></td>
+          <td>12</td>
+          <td>12</td>
+          <td>Telefon: &#39;611-234-567&#39; -&gt; &#39;533-777-888&#39;; Łączenie dowozu z pracą: &#39;Tak&#39; -&gt; &#39;Nie&#39;</td>
+        </tr>
+        <tr>
+          <td>12</td>
+          <td><span class="badge b-unch">Unchanged</span></td>
+          <td>Pending</td>
+          <td><b>Jankowski Mikołaj</b></td>
+          <td>13</td>
+          <td>13</td>
+          <td><span style='color:#94A3B8;'>Brak zmian</span></td>
+        </tr>
+        <tr>
+          <td>13</td>
+          <td><span class="badge b-unch">Unchanged</span></td>
+          <td>Pending</td>
+          <td><b>Mazur Wiktoria</b></td>
+          <td>14</td>
+          <td>14</td>
+          <td><span style='color:#94A3B8;'>Brak zmian</span></td>
+        </tr>
+        <tr>
+          <td>14</td>
+          <td><span class="badge b-chg">Changed</span></td>
+          <td>Pending</td>
+          <td><b>Krawczyk Laura</b></td>
+          <td>16</td>
+          <td>15</td>
+          <td>Szkoła: &#39;SP nr 1 im. Mikołaja Kopernika&#39; -&gt; &#39;Zesp&#243;ł Szk&#243;ł Specjalnych nr 2&#39;; Uwagi: &#39;Brak uwag&#39; -&gt; &#39;Przeniesienie do ZSS nr 2 od września&#39;</td>
+        </tr>
+        <tr>
+          <td>15</td>
+          <td><span class="badge b-new">New</span></td>
+          <td>Pending</td>
+          <td><b>Borkowski Stanisław</b></td>
+          <td></td>
+          <td>16</td>
+          <td><span style='color:#34D399;'>Nowy rekord do dołączenia do bazy</span></td>
+        </tr>
+        <tr>
+          <td>16</td>
+          <td><span class="badge b-new">New</span></td>
+          <td>Pending</td>
+          <td><b>Czarnecka Helena</b></td>
+          <td></td>
+          <td>17</td>
+          <td><span style='color:#34D399;'>Nowy rekord do dołączenia do bazy</span></td>
+        </tr>
+      </tbody>
+    </table>
+    <footer>Wygenerowano automatycznie przez Excel Master Updater &bull; Zero External Dependencies</footer>
+  </div>
+</body>
+</html>

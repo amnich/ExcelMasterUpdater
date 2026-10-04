@@ -1,0 +1,6 @@
+﻿KodDziecka;ImieNazwisko;Klasa;Telefon;Uwagi
+D-1001;Nowak Jan;1A;500-111-000;Pierwszy wiersz normalny
+;Kowalski Adam;2B;500-111-001;BLAD - puste ID
+D-1003;Wisniewski Piotr;3A;500-111-002;Poprawny
+D-1003;Wisniewski Piotr Duplikat;3A;500-999-999;BLAD - zduplikowany klucz w pliku
+D-1099;Zupelnie Nowy;1B;500-888-777;Nowy uczen

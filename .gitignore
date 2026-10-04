@@ -1,0 +1,4 @@
+﻿# Test workspace artifacts
+Tests/E2E_Workspace/
+*.bak
+*.bak.xlsx
