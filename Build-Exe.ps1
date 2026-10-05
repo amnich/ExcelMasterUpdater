@@ -44,7 +44,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$ScriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
+$ScriptDir = if (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) { $PSScriptRoot } elseif ($MyInvocation.MyCommand -and -not [string]::IsNullOrWhiteSpace($MyInvocation.MyCommand.Path)) { Split-Path -Parent $MyInvocation.MyCommand.Path } else { (Get-Location).Path }
 $InputScript = Join-Path $ScriptDir 'Master-Updater.ps1'
 
 if (-not $OutputFile) {
@@ -81,10 +81,23 @@ $ps2exeParams = @{
     x64           = $true
 }
 
+$embedFiles = @{}
 $langFile = Join-Path $ScriptDir 'language.json'
 if (Test-Path $langFile) {
-    $ps2exeParams['embedFiles'] = @($langFile)
+    $embedFiles['.\language.json'] = $langFile
     Write-Host "Embedding language catalog: $langFile" -ForegroundColor Gray
+}
+
+$docsDir = Join-Path $ScriptDir 'Docs'
+if (Test-Path $docsDir) {
+    Get-ChildItem -LiteralPath $docsDir -File | ForEach-Object {
+        $embedFiles[".\Docs\$($_.Name)"] = $_.FullName
+    }
+    Write-Host "Embedding documentation files: $docsDir" -ForegroundColor Gray
+}
+
+if ($embedFiles.Count -gt 0) {
+    $ps2exeParams['embedFiles'] = $embedFiles
 }
 
 if ($IconFile -and (Test-Path $IconFile)) {

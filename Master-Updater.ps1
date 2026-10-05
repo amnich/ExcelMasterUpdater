@@ -123,6 +123,31 @@ Add-Type -AssemblyName System.IO.Compression.FileSystem
 Add-Type -AssemblyName System.Xml
 Add-Type -AssemblyName System.Xml.Linq
 
+# Safe Application Root Directory Resolution (dual compatibility: .ps1 script & ps2exe compiled binary)
+$script:AppRootDir = $null
+function Get-ApplicationRootDir {
+    if ($script:AppRootDir -and -not [string]::IsNullOrWhiteSpace($script:AppRootDir)) {
+        return $script:AppRootDir
+    }
+    $psRoot = if (Test-Path 'variable:PSScriptRoot') { (Get-Variable -Name 'PSScriptRoot' -ValueOnly -ErrorAction SilentlyContinue) } else { $null }
+    $scRoot = if (Test-Path 'variable:ScriptRoot') { (Get-Variable -Name 'ScriptRoot' -ValueOnly -ErrorAction SilentlyContinue) } else { $null }
+
+    $dir = if (-not [string]::IsNullOrWhiteSpace($psRoot)) {
+        $psRoot
+    } elseif (-not [string]::IsNullOrWhiteSpace($scRoot)) {
+        $scRoot
+    } elseif ([System.AppDomain]::CurrentDomain.BaseDirectory) {
+        [System.AppDomain]::CurrentDomain.BaseDirectory.TrimEnd('\')
+    } elseif ($MyInvocation -and $MyInvocation.MyCommand -and -not [string]::IsNullOrWhiteSpace($MyInvocation.MyCommand.Path)) {
+        Split-Path -Parent $MyInvocation.MyCommand.Path
+    } else {
+        (Get-Location).Path
+    }
+    $script:AppRootDir = $dir
+    return $dir
+}
+$script:AppRootDir = Get-ApplicationRootDir
+
 # Cached BrushConverter to avoid redundant allocations across UI renders
 $script:BrushConverter = if ('System.Windows.Media.BrushConverter' -as [type]) { [System.Windows.Media.BrushConverter]::new() } else { $null }
 
@@ -3664,12 +3689,24 @@ function Import-LanguageCatalog {
 
     # 1. Try reading external language.json
     $foundPath = $null
-    $candidates = @(
-        $CatalogPath,
-        (Join-Path $PSScriptRoot 'language.json'),
-        (Join-Path (Split-Path -Parent $PSScriptRoot) 'language.json'),
-        (Join-Path (Get-Location).Path 'language.json')
-    )
+    $baseAppDir = Get-ApplicationRootDir
+    $candidates = [System.Collections.Generic.List[string]]::new()
+    if (-not [string]::IsNullOrWhiteSpace($CatalogPath)) {
+        $candidates.Add($CatalogPath)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($baseAppDir)) {
+        $candidates.Add((Join-Path $baseAppDir 'language.json'))
+        try {
+            $parent = Split-Path -Parent $baseAppDir
+            if (-not [string]::IsNullOrWhiteSpace($parent)) {
+                $candidates.Add((Join-Path $parent 'language.json'))
+            }
+        } catch { }
+    }
+    $loc = (Get-Location).Path
+    if (-not [string]::IsNullOrWhiteSpace($loc)) {
+        $candidates.Add((Join-Path $loc 'language.json'))
+    }
     foreach ($cand in $candidates) {
         if (-not [string]::IsNullOrWhiteSpace($cand) -and (Test-Path -LiteralPath $cand)) {
             $foundPath = $cand
@@ -9270,7 +9307,7 @@ function Show-MasterUpdater {
         $btnOpenBackups.add_Click({
             $bDir = $script:AppConfig.BackupDirectory
             if ([string]::IsNullOrWhiteSpace($bDir)) {
-                $baseDir = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
+                $baseDir = Get-ApplicationRootDir
                 $bDir = Join-Path $baseDir 'Backups'
             }
             if (-not (Test-Path $bDir)) { [void][System.IO.Directory]::CreateDirectory($bDir) }
@@ -9283,7 +9320,7 @@ function Show-MasterUpdater {
         $btnOpenLogs.add_Click({
             $lDir = $script:AppConfig.LogDirectory
             if ([string]::IsNullOrWhiteSpace($lDir)) {
-                $baseDir = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
+                $baseDir = Get-ApplicationRootDir
                 $lDir = Join-Path $baseDir 'Logs'
             }
             if (-not (Test-Path $lDir)) { [void][System.IO.Directory]::CreateDirectory($lDir) }
@@ -9413,12 +9450,12 @@ function Show-MasterUpdater {
 
         $curBackups = $script:AppConfig.BackupDirectory
         if ([string]::IsNullOrWhiteSpace($curBackups)) {
-            $baseDir = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
+            $baseDir = Get-ApplicationRootDir
             $curBackups = Join-Path $baseDir 'Backups'
         }
         $curLogs    = $script:AppConfig.LogDirectory
         if ([string]::IsNullOrWhiteSpace($curLogs)) {
-            $baseDir = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
+            $baseDir = Get-ApplicationRootDir
             $curLogs = Join-Path $baseDir 'Logs'
         }
 
@@ -9478,7 +9515,7 @@ function Show-MasterUpdater {
             Margin          = New-Object System.Windows.Thickness(0, 0, 8, 0)
         }
         $btnDoc.add_Click({
-            $baseDir = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
+            $baseDir = Get-ApplicationRootDir
             $langSuffix = switch ($script:CurrentLanguage) {
                 'pl' { '_PL.md' }
                 'de' { '_DE.md' }
@@ -9517,7 +9554,7 @@ function Show-MasterUpdater {
         $btnHBackups.add_Click({
             $bDir = $script:AppConfig.BackupDirectory
             if ([string]::IsNullOrWhiteSpace($bDir)) {
-                $baseDir = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
+                $baseDir = Get-ApplicationRootDir
                 $bDir = Join-Path $baseDir 'Backups'
             }
             if (-not (Test-Path $bDir)) { [void][System.IO.Directory]::CreateDirectory($bDir) }
@@ -9535,7 +9572,7 @@ function Show-MasterUpdater {
         $btnHLogs.add_Click({
             $lDir = $script:AppConfig.LogDirectory
             if ([string]::IsNullOrWhiteSpace($lDir)) {
-                $baseDir = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
+                $baseDir = Get-ApplicationRootDir
                 $lDir = Join-Path $baseDir 'Logs'
             }
             if (-not (Test-Path $lDir)) { [void][System.IO.Directory]::CreateDirectory($lDir) }
@@ -9611,7 +9648,7 @@ function Show-MasterUpdater {
         try {
             $window.ShowDialog() | Out-Null
         } catch {
-            $baseDir = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
+            $baseDir = Get-ApplicationRootDir
             $crashLog = Join-Path $baseDir 'crash.log'
             $info = "SHOWDIALOG CRASH:`n" +
                     "Exception: $($_.Exception.ToString())`n" +
@@ -9634,11 +9671,14 @@ if ($MyInvocation.InvocationName -ne '.' -and (-not $MyInvocation.Line -or -not 
             try { [void][ConsoleHelper]::AttachConsole(-1) } catch { }
         }
         $hRes = Invoke-HeadlessMasterUpdater -BaseFilePath $BaseFilePath -IncomingPath $IncomingPath -BaseSheet $BaseSheet -IncomingSheet $IncomingSheet -ConfigPath $ConfigPath -AutoAccept $AutoAccept -ExportReportPath $ExportReportPath -SummaryJsonPath $SummaryJsonPath -Quiet:$Quiet
-        if ($MyInvocation.MyCommand.Path -match '\.exe$' -or [System.AppDomain]::CurrentDomain.FriendlyName -match '\.exe$') {
+        if (($MyInvocation.MyCommand -and $MyInvocation.MyCommand.Path -and $MyInvocation.MyCommand.Path -match '\.exe$') -or [System.AppDomain]::CurrentDomain.FriendlyName -match '\.exe$') {
             $ec = if ($hRes -and $hRes.Success) { 0 } else { 1 }
             exit $ec
         }
     } else {
         Show-MasterUpdater -InitBaseFilePath $BaseFilePath -InitIncomingPath $IncomingPath -InitBaseSheet $BaseSheet -InitIncomingSheet $IncomingSheet -CustomConfigPath $ConfigPath -NonInteractive:$NonInteractive
+        if (($MyInvocation.MyCommand -and $MyInvocation.MyCommand.Path -and $MyInvocation.MyCommand.Path -match '\.exe$') -or [System.AppDomain]::CurrentDomain.FriendlyName -match '\.exe$') {
+            exit 0
+        }
     }
 }
