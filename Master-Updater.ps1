@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     Excel Master Updater - Master file child records synchronization and update tool.
 
@@ -3502,6 +3502,97 @@ function Invoke-HeadlessMasterUpdater {
 # ==============================================================================
 # Region 9: WPF UI & Localization Catalog (PL / EN / DE)
 # ==============================================================================
+
+function Set-ItemCellSelected {
+    param(
+        $ReviewItem,
+        [string]$Column,
+        [bool]$IsSelected
+    )
+    if (-not $ReviewItem -or [string]::IsNullOrEmpty($Column)) { return }
+    if ($ReviewItem -is [System.Collections.IDictionary]) {
+        if ($null -eq $ReviewItem['SelectedCells']) {
+            $ReviewItem['SelectedCells'] = @{}
+        }
+        $ReviewItem['SelectedCells'][$Column] = $IsSelected
+    } else {
+        if ($ReviewItem.PSObject.Properties['SelectedCells']) {
+            if ($null -eq $ReviewItem.SelectedCells) {
+                $ReviewItem.SelectedCells = @{}
+            }
+        } else {
+            $ReviewItem.PSObject.Properties.Add([System.Management.Automation.PSNoteProperty]::new('SelectedCells', @{}))
+        }
+        $ReviewItem.SelectedCells[$Column] = $IsSelected
+    }
+}
+${function:global:Set-ItemCellSelected} = ${function:Set-ItemCellSelected}
+
+function Get-ItemCellSelected {
+    param(
+        $ReviewItem,
+        [string]$Column
+    )
+    if (-not $ReviewItem -or [string]::IsNullOrEmpty($Column)) { return $true }
+    $cells = if ($ReviewItem -is [System.Collections.IDictionary]) {
+        $ReviewItem['SelectedCells']
+    } elseif ($ReviewItem.PSObject.Properties['SelectedCells']) {
+        $ReviewItem.SelectedCells
+    } else {
+        $null
+    }
+    if ($null -eq $cells) { return $true }
+    if ($cells.ContainsKey($Column)) {
+        return ($cells[$Column] -ne $false)
+    }
+    return $true
+}
+${function:global:Get-ItemCellSelected} = ${function:Get-ItemCellSelected}
+
+function Set-ChangeCustomEdited {
+    param(
+        $Change,
+        [bool]$IsEdited
+    )
+    if (-not $Change) { return }
+    if ($Change -is [System.Collections.IDictionary]) {
+        $Change['CustomEdited'] = $IsEdited
+    } else {
+        if ($Change.PSObject.Properties['CustomEdited']) {
+            $Change.CustomEdited = $IsEdited
+        } else {
+            $Change.PSObject.Properties.Add([System.Management.Automation.PSNoteProperty]::new('CustomEdited', $IsEdited))
+        }
+    }
+}
+${function:global:Set-ChangeCustomEdited} = ${function:Set-ChangeCustomEdited}
+
+function Get-ChangeOriginalNewValue {
+    param($Change)
+    if (-not $Change) { return '' }
+    if ($Change -is [System.Collections.IDictionary]) {
+        if ($Change.Contains('OriginalNewValue') -and $null -ne $Change['OriginalNewValue']) {
+            return $Change['OriginalNewValue'].ToString()
+        }
+        return ''
+    }
+    if ($Change.PSObject.Properties['OriginalNewValue'] -and $null -ne $Change.OriginalNewValue) {
+        return $Change.OriginalNewValue.ToString()
+    }
+    return ''
+}
+${function:global:Get-ChangeOriginalNewValue} = ${function:Get-ChangeOriginalNewValue}
+
+function Invoke-UpdateStagingSummary {
+    if ($script:UpdateStagingSummary -is [System.Management.Automation.ScriptBlock]) {
+        & $script:UpdateStagingSummary
+    } elseif ($global:UpdateStagingSummary -is [System.Management.Automation.ScriptBlock]) {
+        & $global:UpdateStagingSummary
+    }
+}
+${function:global:Invoke-UpdateStagingSummary} = ${function:Invoke-UpdateStagingSummary}
+
+$script:_suppressSelectionRender = $false
 $script:LanguagesCatalog = [ordered]@{}
 
 <#
@@ -3991,7 +4082,7 @@ function Show-MasterUpdater {
         <Style TargetType="Button">
             <Setter Property="FontFamily" Value="Segoe UI"/>
             <Setter Property="FontSize" Value="13"/>
-            <Setter Property="Padding" Value="14,6"/>
+            <Setter Property="Padding" Value="12,4"/>
             <Setter Property="Cursor" Value="Hand"/>
             <Setter Property="BorderThickness" Value="1"/>
             <Setter Property="BorderBrush" Value="{DynamicResource BorderCard}"/>
@@ -4028,7 +4119,7 @@ function Show-MasterUpdater {
             <Setter Property="Foreground" Value="{DynamicResource TextPrimary}"/>
             <Setter Property="BorderBrush" Value="{DynamicResource BorderInput}"/>
             <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="Padding" Value="8,6"/>
+            <Setter Property="Padding" Value="6,4"/>
             <Setter Property="VerticalContentAlignment" Value="Center"/>
             <Setter Property="CaretBrush" Value="{DynamicResource TextPrimary}"/>
             <Setter Property="SnapsToDevicePixels" Value="True"/>
@@ -4055,7 +4146,7 @@ function Show-MasterUpdater {
         <Style TargetType="ComboBoxItem">
             <Setter Property="Background" Value="{DynamicResource BgCard}"/>
             <Setter Property="Foreground" Value="{DynamicResource TextPrimary}"/>
-            <Setter Property="Padding" Value="8,6"/>
+            <Setter Property="Padding" Value="6,4"/>
             <Setter Property="Cursor" Value="Hand"/>
             <Setter Property="Template">
                 <Setter.Value>
@@ -4199,7 +4290,7 @@ function Show-MasterUpdater {
             <Setter Property="FontWeight" Value="SemiBold"/>
             <Setter Property="Foreground" Value="{DynamicResource TextSecondary}"/>
             <Setter Property="Background" Value="Transparent"/>
-            <Setter Property="Padding" Value="18,12"/>
+            <Setter Property="Padding" Value="12,6"/>
             <Setter Property="Cursor" Value="Hand"/>
             <Setter Property="Template">
                 <Setter.Value>
@@ -4323,6 +4414,64 @@ function Show-MasterUpdater {
                 </Setter.Value>
             </Setter>
         </Style>
+        
+        <!-- Modern Flat ScrollBar Styles -->
+        <Style x:Key="ModernScrollBarThumb" TargetType="{x:Type Thumb}">
+            <Setter Property="IsTabStop" Value="False"/>
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type Thumb}">
+                        <Border CornerRadius="4" Background="{DynamicResource TextMuted}" Margin="2" Opacity="0.4">
+                            <Border.Style>
+                                <Style TargetType="Border">
+                                    <Style.Triggers>
+                                        <Trigger Property="IsMouseOver" Value="True">
+                                            <Setter Property="Opacity" Value="0.7"/>
+                                        </Trigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Border.Style>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style TargetType="{x:Type ScrollBar}">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type ScrollBar}">
+                        <Grid Background="{TemplateBinding Background}">
+                            <Track x:Name="PART_Track" IsDirectionReversed="true">
+                                <Track.DecreaseRepeatButton>
+                                    <RepeatButton Command="ScrollBar.PageUpCommand" Opacity="0" Focusable="False"/>
+                                </Track.DecreaseRepeatButton>
+                                <Track.Thumb>
+                                    <Thumb Style="{StaticResource ModernScrollBarThumb}" />
+                                </Track.Thumb>
+                                <Track.IncreaseRepeatButton>
+                                    <RepeatButton Command="ScrollBar.PageDownCommand" Opacity="0" Focusable="False"/>
+                                </Track.IncreaseRepeatButton>
+                            </Track>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="Orientation" Value="Horizontal">
+                                <Setter TargetName="PART_Track" Property="IsDirectionReversed" Value="False"/>
+                                <Setter Property="Height" Value="12"/>
+                                <Setter Property="MinHeight" Value="12"/>
+                            </Trigger>
+                            <Trigger Property="Orientation" Value="Vertical">
+                                <Setter Property="Width" Value="12"/>
+                                <Setter Property="MinWidth" Value="12"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
     </Window.Resources>
     <Grid x:Name="mainGrid" Background="{DynamicResource BgApp}">
         <Grid.RowDefinitions>
@@ -4332,7 +4481,7 @@ function Show-MasterUpdater {
         </Grid.RowDefinitions>
 
         <!-- Top Header Bar -->
-        <Border x:Name="topHeaderBorder" Grid.Row="0" Background="{DynamicResource BgHeader}" BorderBrush="{DynamicResource BorderCard}" BorderThickness="0,0,0,1" Padding="18,12">
+        <Border x:Name="topHeaderBorder" Grid.Row="0" Background="{DynamicResource BgHeader}" BorderBrush="{DynamicResource BorderCard}" BorderThickness="0,0,0,1" Padding="12,6">
             <Grid>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
@@ -4340,7 +4489,7 @@ function Show-MasterUpdater {
                 </Grid.RowDefinitions>
 
                 <!-- Brand & Utilities -->
-                <Grid Grid.Row="0" Margin="0,0,0,12">
+                <Grid Grid.Row="0" Margin="0,0,0,6">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
@@ -4383,13 +4532,13 @@ function Show-MasterUpdater {
                     </Grid.ColumnDefinitions>
 
                     <!-- Card 1: Master Base File -->
-                    <Border x:Name="cardBaseFile" Grid.Column="0" AllowDrop="True" Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderCard}" BorderThickness="1" CornerRadius="8" Padding="12,10">
+                    <Border x:Name="cardBaseFile" Grid.Column="0" AllowDrop="True" Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderCard}" BorderThickness="1" CornerRadius="8" Padding="10,6">
                         <Grid>
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto"/>
                                 <RowDefinition Height="Auto"/>
                             </Grid.RowDefinitions>
-                            <Grid Grid.Row="0" Margin="0,0,0,8">
+                            <Grid Grid.Row="0" Margin="0,0,0,4">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*"/>
                                     <ColumnDefinition Width="Auto"/>
@@ -4414,13 +4563,13 @@ function Show-MasterUpdater {
                     </Border>
 
                     <!-- Card 2: Incoming Update File -->
-                    <Border x:Name="cardIncomingFile" Grid.Column="2" AllowDrop="True" Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderCard}" BorderThickness="1" CornerRadius="8" Padding="12,10">
+                    <Border x:Name="cardIncomingFile" Grid.Column="2" AllowDrop="True" Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderCard}" BorderThickness="1" CornerRadius="8" Padding="10,6">
                         <Grid>
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto"/>
                                 <RowDefinition Height="Auto"/>
                             </Grid.RowDefinitions>
-                            <Grid Grid.Row="0" Margin="0,0,0,8">
+                            <Grid Grid.Row="0" Margin="0,0,0,4">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*"/>
                                     <ColumnDefinition Width="Auto"/>
@@ -4495,7 +4644,7 @@ function Show-MasterUpdater {
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="14"/>
-                            <ColumnDefinition Width="340"/>
+                            <ColumnDefinition Width="280"/>
                         </Grid.ColumnDefinitions>
 
                         <!-- Mapping Rules DataGrid in Card -->
@@ -4524,15 +4673,15 @@ function Show-MasterUpdater {
                                     <RowDefinition Height="*"/>
                                 </Grid.RowDefinitions>
                                 <StackPanel Grid.Row="0" Margin="0,0,0,10">
-                                    <TextBlock x:Name="lblJoinKeyTitle" Text="🔗 Klucz złączenia (Join Key)" Foreground="{DynamicResource TextPrimary}" FontWeight="Bold" FontSize="14"/>
-                                    <TextBlock x:Name="lblJoinKeyHint" Text="Zaznacz kolumny jednoznacznie identyfikujące wiersz." Foreground="{DynamicResource TextSecondary}" FontSize="11" Margin="0,2,0,0"/>
+                                    <TextBlock x:Name="lblJoinKeyTitle" Text="🔗 Klucz złączenia (Join Key)" Foreground="{DynamicResource TextPrimary}" FontWeight="Bold" FontSize="12"/>
+                                    <TextBlock x:Name="lblJoinKeyHint" Text="Zaznacz kolumny id. wiersz." Foreground="{DynamicResource TextSecondary}" FontSize="10" Margin="0,2,0,0"/>
                                 </StackPanel>
 
-                                <TextBlock x:Name="lblJoinBaseSub" Grid.Row="1" Text="Kolumny klucza bazy:" Foreground="{DynamicResource TextSecondary}" FontSize="12" Margin="0,0,0,4"/>
-                                <ListBox x:Name="lbJoinBase" Grid.Row="2" Background="{DynamicResource BgInput}" BorderBrush="{DynamicResource BorderInput}" SelectionMode="Extended" Margin="0,0,0,10"/>
+                                <TextBlock x:Name="lblJoinBaseSub" Grid.Row="1" Text="Kolumny bazy:" Foreground="{DynamicResource TextSecondary}" FontSize="11" Margin="0,0,0,4"/>
+                                <ListBox x:Name="lbJoinBase" Grid.Row="2" Background="{DynamicResource BgInput}" BorderBrush="{DynamicResource BorderInput}" SelectionMode="Extended" Margin="0,0,0,10" FontSize="11"/>
 
-                                <TextBlock x:Name="lblJoinIncomingSub" Grid.Row="3" Text="Kolumny klucza zmian:" Foreground="{DynamicResource TextSecondary}" FontSize="12" Margin="0,0,0,4"/>
-                                <ListBox x:Name="lbJoinIncoming" Grid.Row="4" Background="{DynamicResource BgInput}" BorderBrush="{DynamicResource BorderInput}" SelectionMode="Extended"/>
+                                <TextBlock x:Name="lblJoinIncomingSub" Grid.Row="3" Text="Kolumny zmian:" Foreground="{DynamicResource TextSecondary}" FontSize="11" Margin="0,0,0,4"/>
+                                <ListBox x:Name="lbJoinIncoming" Grid.Row="4" Background="{DynamicResource BgInput}" BorderBrush="{DynamicResource BorderInput}" SelectionMode="Extended" FontSize="11"/>
                             </Grid>
                         </Border>
                     </Grid>
@@ -4967,8 +5116,10 @@ function Show-MasterUpdater {
     $btnHelp            = $window.FindName('btnHelp')
     $script:mainTabs    = $window.FindName('mainTabs')
     $mainTabs           = $script:mainTabs
-    $tabMapping         = $window.FindName('tabMapping')
-    $tabReview          = $window.FindName('tabReview')
+    $script:tabMapping  = $window.FindName('tabMapping')
+    $tabMapping         = $script:tabMapping
+    $script:tabReview   = $window.FindName('tabReview')
+    $tabReview          = $script:tabReview
     $btnAutoMap         = $window.FindName('btnAutoMap')
     $btnAddRule         = $window.FindName('btnAddRule')
     $btnEditRule        = $window.FindName('btnEditRule')
@@ -5323,7 +5474,8 @@ function Show-MasterUpdater {
 
     # Helper: Update Staging Summary
     $UpdateStagingSummary = {
-        $lblStaging = if ($txtStagingSummary) { $txtStagingSummary } elseif ($script:txtStagingSummary) { $script:txtStagingSummary } else { $null }
+        $w = if ($window) { $window } elseif ($script:ActiveWindow) { $script:ActiveWindow } else { $null }
+        $lblStaging = if ($w) { $w.FindName('txtStagingSummary') } else { $null }
         if (-not $lblStaging) { return }
         if (-not $script:AllReviewItems -or $script:AllReviewItems.Count -eq 0) {
             $lblStaging.Text = ''
@@ -5339,7 +5491,7 @@ function Show-MasterUpdater {
             $hasStagedInRow = $false
             if ($rec.Changes -and $rec.Changes.Count -gt 0) {
                 foreach ($chg in $rec.Changes) {
-                    $isSelected = if ($item.SelectedCells) { ($item.SelectedCells[$chg.BaseColumn] -ne $false) } else { $true }
+                    $isSelected = Get-ItemCellSelected $item $chg.BaseColumn
                     if ($isSelected) {
                         $stagedChanges++
                         $hasStagedInRow = $true
@@ -5358,43 +5510,55 @@ function Show-MasterUpdater {
         $lblStaging.Text = $fmt -f $stagedChanges, $affectedRows, $skippedChanges
 
         $hasAccepted = $acceptedItems.Count -gt 0
-        if ($btnApplyAccepted) { $btnApplyAccepted.IsEnabled = $hasAccepted }
-        if ($btnApplyToNewFile) { $btnApplyToNewFile.IsEnabled = $hasAccepted }
+        $btnApply = if ($w) { $w.FindName('btnApplyAccepted') } else { $null }
+        $btnNewF  = if ($w) { $w.FindName('btnApplyToNewFile') } else { $null }
+        if ($btnApply) { $btnApply.IsEnabled = $hasAccepted }
+        if ($btnNewF)  { $btnNewF.IsEnabled = $hasAccepted }
     }
     $script:UpdateStagingSummary = $UpdateStagingSummary
+    $global:UpdateStagingSummary = $UpdateStagingSummary
 
     # Helper: Update Counters
     $UpdateCounters = {
+        $w = if ($window) { $window } elseif ($script:ActiveWindow) { $script:ActiveWindow } else { $null }
+        if (-not $w) { return }
+        $txtKpiAll  = $w.FindName('txtKpiCountAll')
+        $txtKpiNew  = $w.FindName('txtKpiCountNew')
+        $txtKpiChg  = $w.FindName('txtKpiCountChanged')
+        $txtKpiAmb  = $w.FindName('txtKpiCountAmbiguous')
+        $txtKpiAcc  = $w.FindName('txtKpiCountAccepted')
+        $txtKpiSkip = $w.FindName('txtKpiCountSkipped')
+        $txtCnt     = $w.FindName('txtCounters')
+        $btnUnd     = $w.FindName('btnUndo')
+
         if (-not $script:AllReviewItems -or $script:AllReviewItems.Count -eq 0) {
-            if ($script:txtCounters)   { $script:txtCounters.Text = (Get-UiString 'CountersFormat') -f 0, 0, 0, 0, 0, 0, 0 }
-            elseif ($txtCounters)      { $txtCounters.Text = (Get-UiString 'CountersFormat') -f 0, 0, 0, 0, 0, 0, 0 }
-            if ($txtKpiCountAll)       { $txtKpiCountAll.Text = "0" }
-            if ($txtKpiCountNew)       { $txtKpiCountNew.Text = "0" }
-            if ($txtKpiCountChanged)   { $txtKpiCountChanged.Text = "0" }
-            if ($txtKpiCountAmbiguous) { $txtKpiCountAmbiguous.Text = "0" }
-            if ($txtKpiCountAccepted)  { $txtKpiCountAccepted.Text = "0" }
-            if ($txtKpiCountSkipped)   { $txtKpiCountSkipped.Text = "0" }
-            if ($btnUndo)              { $btnUndo.IsEnabled = ($script:UndoStack.Count -gt 0) }
-            & $UpdateStagingSummary
+            if ($txtCnt)     { $txtCnt.Text = (Get-UiString 'CountersFormat') -f 0, 0, 0, 0, 0, 0, 0 }
+            if ($txtKpiAll)  { $txtKpiAll.Text = "0" }
+            if ($txtKpiNew)  { $txtKpiNew.Text = "0" }
+            if ($txtKpiChg)  { $txtKpiChg.Text = "0" }
+            if ($txtKpiAmb)  { $txtKpiAmb.Text = "0" }
+            if ($txtKpiAcc)  { $txtKpiAcc.Text = "0" }
+            if ($txtKpiSkip) { $txtKpiSkip.Text = "0" }
+            if ($btnUnd)     { $btnUnd.IsEnabled = ($script:UndoStack.Count -gt 0) }
+            Invoke-UpdateStagingSummary
             return
         }
-        $total = $script:AllReviewItems.Count
-        $cNew  = ($script:AllReviewItems | Where-Object { $_.Record.Status -eq 'New' }).Count
-        $cChg  = ($script:AllReviewItems | Where-Object { $_.Record.Status -eq 'Changed' }).Count
-        $cAmb  = ($script:AllReviewItems | Where-Object { $_.Record.Status -eq 'Ambiguous' }).Count
-        $cSkip = ($script:AllReviewItems | Where-Object { $_.Decision -eq 'Skipped' }).Count
-        $cAcc  = ($script:AllReviewItems | Where-Object { $_.Decision -eq 'Accepted' }).Count
-        $cRej  = ($script:AllReviewItems | Where-Object { $_.Decision -eq 'Rejected' }).Count
-        if ($script:txtCounters)   { $script:txtCounters.Text = (Get-UiString 'CountersFormat') -f $total, $cNew, $cChg, $cAmb, $cSkip, $cAcc, $cRej }
-        elseif ($txtCounters)      { $txtCounters.Text = (Get-UiString 'CountersFormat') -f $total, $cNew, $cChg, $cAmb, $cSkip, $cAcc, $cRej }
-        if ($txtKpiCountAll)       { $txtKpiCountAll.Text = "$total" }
-        if ($txtKpiCountNew)       { $txtKpiCountNew.Text = "$cNew" }
-        if ($txtKpiCountChanged)   { $txtKpiCountChanged.Text = "$cChg" }
-        if ($txtKpiCountAmbiguous) { $txtKpiCountAmbiguous.Text = "$cAmb" }
-        if ($txtKpiCountAccepted)  { $txtKpiCountAccepted.Text = "$cAcc" }
-        if ($txtKpiCountSkipped)   { $txtKpiCountSkipped.Text = "$($cSkip + $cRej)" }
-        if ($btnUndo)              { $btnUndo.IsEnabled = ($script:UndoStack.Count -gt 0) }
-        & $UpdateStagingSummary
+        $total = @($script:AllReviewItems).Count
+        $cNew  = @($script:AllReviewItems | Where-Object { $_.Record.Status -eq 'New' }).Count
+        $cChg  = @($script:AllReviewItems | Where-Object { $_.Record.Status -eq 'Changed' }).Count
+        $cAmb  = @($script:AllReviewItems | Where-Object { $_.Record.Status -eq 'Ambiguous' }).Count
+        $cSkip = @($script:AllReviewItems | Where-Object { $_.Decision -eq 'Skipped' }).Count
+        $cAcc  = @($script:AllReviewItems | Where-Object { $_.Decision -eq 'Accepted' }).Count
+        $cRej  = @($script:AllReviewItems | Where-Object { $_.Decision -eq 'Rejected' }).Count
+        if ($txtCnt)     { $txtCnt.Text = (Get-UiString 'CountersFormat') -f $total, $cNew, $cChg, $cAmb, $cSkip, $cAcc, $cRej }
+        if ($txtKpiAll)  { $txtKpiAll.Text = "$total" }
+        if ($txtKpiNew)  { $txtKpiNew.Text = "$cNew" }
+        if ($txtKpiChg)  { $txtKpiChg.Text = "$cChg" }
+        if ($txtKpiAmb)  { $txtKpiAmb.Text = "$cAmb" }
+        if ($txtKpiAcc)  { $txtKpiAcc.Text = "$cAcc" }
+        if ($txtKpiSkip) { $txtKpiSkip.Text = "$($cSkip + $cRej)" }
+        if ($btnUnd)     { $btnUnd.IsEnabled = ($script:UndoStack.Count -gt 0) }
+        Invoke-UpdateStagingSummary
     }
     $script:UpdateCounters = $UpdateCounters
 
@@ -6749,12 +6913,16 @@ function Show-MasterUpdater {
     # Live Preview Immediate Reaction to Join Key selection changes
     if ($lbJoinBase) {
         $lbJoinBase.add_SelectionChanged({
-            & $script:UpdateDataMappingPreview
+            if ($script:UpdateDataMappingPreview -is [System.Management.Automation.ScriptBlock]) {
+                & $script:UpdateDataMappingPreview
+            }
         })
     }
     if ($lbJoinIncoming) {
         $lbJoinIncoming.add_SelectionChanged({
-            & $script:UpdateDataMappingPreview
+            if ($script:UpdateDataMappingPreview -is [System.Management.Automation.ScriptBlock]) {
+                & $script:UpdateDataMappingPreview
+            }
         })
     }
 
@@ -6829,12 +6997,8 @@ function Show-MasterUpdater {
     # Render Detail Pane
     $script:RenderDetailPane = $RenderDetailPane = {
         param($Item, [switch]$SkipBaseRowRefresh)
-        if (-not $panelDiffContainer) {
-            $panelDiffContainer = if ($window) { $window.FindName('panelDiffContainer') } else { $script:ActiveWindow.FindName('panelDiffContainer') }
-        }
-        if (-not $txtDetailHeader) {
-            $txtDetailHeader = if ($window) { $window.FindName('txtDetailHeader') } else { $script:ActiveWindow.FindName('txtDetailHeader') }
-        }
+        $panelDiffContainer = if ($window) { $window.FindName('panelDiffContainer') } elseif ($script:ActiveWindow) { $script:ActiveWindow.FindName('panelDiffContainer') } else { $null }
+        $txtDetailHeader = if ($window) { $window.FindName('txtDetailHeader') } elseif ($script:ActiveWindow) { $script:ActiveWindow.FindName('txtDetailHeader') } else { $null }
         if (-not $panelDiffContainer) { return }
         $panelDiffContainer.Children.Clear()
         if (-not $Item) {
@@ -6842,8 +7006,18 @@ function Show-MasterUpdater {
             return
         }
 
+        if ($Item) {
+            if ($Item -is [System.Collections.IDictionary]) {
+                if ($null -eq $Item['SelectedCells']) { $Item['SelectedCells'] = @{} }
+            } else {
+                if (-not $Item.PSObject.Properties['SelectedCells']) {
+                    $Item.PSObject.Properties.Add([System.Management.Automation.PSNoteProperty]::new('SelectedCells', @{}))
+                } elseif ($null -eq $Item.SelectedCells) {
+                    $Item.SelectedCells = @{}
+                }
+            }
+        }
         $p = Get-UpdaterThemePalette $script:CurrentTheme
-        if ($Item -and -not $Item.SelectedCells) { $Item.SelectedCells = @{} }
         $rec = $Item.Record
         $status = $rec.Status
 
@@ -6851,30 +7025,59 @@ function Show-MasterUpdater {
             $txtDetailHeader.Text = "$((Get-UiString 'StatusBadgeNew')): $($Item.Title)"
             $grid = New-Object System.Windows.Controls.Grid
             $grid.Margin = New-Object System.Windows.Thickness(0, 8, 0, 0)
-            [void]$grid.ColumnDefinitions.Add((New-Object System.Windows.Controls.ColumnDefinition -Property @{ Width = [System.Windows.GridLength]::new(180) }))
-            [void]$grid.ColumnDefinitions.Add((New-Object System.Windows.Controls.ColumnDefinition -Property @{ Width = [System.Windows.GridLength]::new(1, [System.Windows.GridUnitType]::Star) }))
+            
+            $colLeft = New-Object System.Windows.Controls.ColumnDefinition -Property @{ Width = [System.Windows.GridLength]::new(250) }
+            $colSplitter = New-Object System.Windows.Controls.ColumnDefinition -Property @{ Width = [System.Windows.GridLength]::Auto }
+            $colRight = New-Object System.Windows.Controls.ColumnDefinition -Property @{ Width = [System.Windows.GridLength]::new(1, [System.Windows.GridUnitType]::Star) }
+            [void]$grid.ColumnDefinitions.Add($colLeft)
+            [void]$grid.ColumnDefinitions.Add($colSplitter)
+            [void]$grid.ColumnDefinitions.Add($colRight)
+
+            $orderedKeys = if ($script:BaseHeaders -and $script:BaseHeaders.Count -gt 0) {
+                $rec.ProjectedRow.Keys | Sort-Object { 
+                    $idx = [System.Array]::IndexOf($script:BaseHeaders, $_)
+                    if ($idx -lt 0) { [int]::MaxValue } else { $idx }
+                }
+            } else {
+                $rec.ProjectedRow.Keys
+            }
 
             $rowIdx = 0
-            foreach ($k in $rec.ProjectedRow.Keys) {
+            foreach ($k in $orderedKeys) {
                 [void]$grid.RowDefinitions.Add((New-Object System.Windows.Controls.RowDefinition -Property @{ Height = [System.Windows.GridLength]::Auto }))
                 $lbl = New-Object System.Windows.Controls.TextBlock -Property @{
                     Text = $k
                     Foreground = $script:BrushConverter.ConvertFromString($p.TextSecondary)
                     FontWeight = [System.Windows.FontWeights]::SemiBold
                     Margin = New-Object System.Windows.Thickness(0, 4, 10, 4)
+                    TextTrimming = [System.Windows.TextTrimming]::CharacterEllipsis
                 }
                 $val = New-Object System.Windows.Controls.TextBlock -Property @{
                     Text = $(if ($rec.ProjectedRow[$k]) { $rec.ProjectedRow[$k].ToString() } else { '' })
                     Foreground = $script:BrushConverter.ConvertFromString($p.TextPrimary)
-                    Margin = New-Object System.Windows.Thickness(0, 4, 0, 4)
+                    Margin = New-Object System.Windows.Thickness(10, 4, 0, 4)
+                    TextWrapping = [System.Windows.TextWrapping]::Wrap
                 }
                 [System.Windows.Controls.Grid]::SetRow($lbl, $rowIdx)
                 [System.Windows.Controls.Grid]::SetColumn($lbl, 0)
                 [System.Windows.Controls.Grid]::SetRow($val, $rowIdx)
-                [System.Windows.Controls.Grid]::SetColumn($val, 1)
+                [System.Windows.Controls.Grid]::SetColumn($val, 2)
                 [void]$grid.Children.Add($lbl)
                 [void]$grid.Children.Add($val)
                 $rowIdx++
+            }
+
+            if ($rowIdx -gt 0) {
+                $splitter = New-Object System.Windows.Controls.GridSplitter -Property @{
+                    Width = 5
+                    HorizontalAlignment = [System.Windows.HorizontalAlignment]::Center
+                    VerticalAlignment = [System.Windows.VerticalAlignment]::Stretch
+                    Background = [System.Windows.Media.Brushes]::Transparent
+                    Cursor = [System.Windows.Input.Cursors]::SizeWE
+                }
+                [System.Windows.Controls.Grid]::SetRowSpan($splitter, $rowIdx)
+                [System.Windows.Controls.Grid]::SetColumn($splitter, 1)
+                [void]$grid.Children.Add($splitter)
             }
             [void]$panelDiffContainer.Children.Add($grid)
 
@@ -6909,13 +7112,33 @@ function Show-MasterUpdater {
                 Cursor          = [System.Windows.Input.Cursors]::Hand
             }
             $allRowCheckboxes = [System.Collections.Generic.List[object]]::new()
+            $btnSelAllRow.Tag = @{ Item = $Item; Boxes = $allRowCheckboxes }
             $btnSelAllRow.add_Click({
-                foreach ($c in $allRowCheckboxes) { $c.IsChecked = $true }
-                & $script:UpdateStagingSummary
+                $ctx = $this.Tag
+                if ($ctx) {
+                    foreach ($c in $ctx.Boxes) { $c.IsChecked = $true }
+                    if ($ctx.Item.Record -and $ctx.Item.Record.Changes) {
+                        foreach ($ch in $ctx.Item.Record.Changes) {
+                            Set-ItemCellSelected $ctx.Item $ch.BaseColumn $true
+                            $ch.SelectedForUpdate = $true
+                        }
+                    }
+                }
+                Invoke-UpdateStagingSummary
             })
+            $btnDeselAllRow.Tag = @{ Item = $Item; Boxes = $allRowCheckboxes }
             $btnDeselAllRow.add_Click({
-                foreach ($c in $allRowCheckboxes) { $c.IsChecked = $false }
-                & $script:UpdateStagingSummary
+                $ctx = $this.Tag
+                if ($ctx) {
+                    foreach ($c in $ctx.Boxes) { $c.IsChecked = $false }
+                    if ($ctx.Item.Record -and $ctx.Item.Record.Changes) {
+                        foreach ($ch in $ctx.Item.Record.Changes) {
+                            Set-ItemCellSelected $ctx.Item $ch.BaseColumn $false
+                            $ch.SelectedForUpdate = $false
+                        }
+                    }
+                }
+                Invoke-UpdateStagingSummary
             })
             [void]$spRowTools.Children.Add($btnSelAllRow)
             [void]$spRowTools.Children.Add($btnDeselAllRow)
@@ -6925,21 +7148,22 @@ function Show-MasterUpdater {
             $grid = New-Object System.Windows.Controls.Grid
             $grid.Margin = New-Object System.Windows.Thickness(0, 0, 0, 0)
             [void]$grid.ColumnDefinitions.Add((New-Object System.Windows.Controls.ColumnDefinition -Property @{ Width = [System.Windows.GridLength]::Auto }))
-            [void]$grid.ColumnDefinitions.Add((New-Object System.Windows.Controls.ColumnDefinition -Property @{ Width = [System.Windows.GridLength]::new(180) }))
+            [void]$grid.ColumnDefinitions.Add((New-Object System.Windows.Controls.ColumnDefinition -Property @{ Width = [System.Windows.GridLength]::new(250) }))
+            [void]$grid.ColumnDefinitions.Add((New-Object System.Windows.Controls.ColumnDefinition -Property @{ Width = [System.Windows.GridLength]::Auto }))
             [void]$grid.ColumnDefinitions.Add((New-Object System.Windows.Controls.ColumnDefinition -Property @{ Width = [System.Windows.GridLength]::new(1, [System.Windows.GridUnitType]::Star) }))
             [void]$grid.ColumnDefinitions.Add((New-Object System.Windows.Controls.ColumnDefinition -Property @{ Width = [System.Windows.GridLength]::new(1, [System.Windows.GridUnitType]::Star) }))
 
             # Header Row
             [void]$grid.RowDefinitions.Add((New-Object System.Windows.Controls.RowDefinition -Property @{ Height = [System.Windows.GridLength]::Auto }))
             $hApp = New-Object System.Windows.Controls.TextBlock -Property @{ Text = Get-UiString 'ColApply'; Foreground = $script:BrushConverter.ConvertFromString($p.TextSecondary); FontWeight = [System.Windows.FontWeights]::Bold; Margin = New-Object System.Windows.Thickness(0, 0, 10, 8) }
-            $hFld = New-Object System.Windows.Controls.TextBlock -Property @{ Text = Get-UiString 'ColField'; Foreground = $script:BrushConverter.ConvertFromString($p.TextSecondary); FontWeight = [System.Windows.FontWeights]::Bold; Margin = New-Object System.Windows.Thickness(0, 0, 10, 8) }
-            $hCur = New-Object System.Windows.Controls.TextBlock -Property @{ Text = Get-UiString 'ColCurrentBase'; Foreground = $script:BrushConverter.ConvertFromString($p.TextSecondary); FontWeight = [System.Windows.FontWeights]::Bold; Margin = New-Object System.Windows.Thickness(0, 0, 10, 8) }
+            $hFld = New-Object System.Windows.Controls.TextBlock -Property @{ Text = Get-UiString 'ColField'; Foreground = $script:BrushConverter.ConvertFromString($p.TextSecondary); FontWeight = [System.Windows.FontWeights]::Bold; Margin = New-Object System.Windows.Thickness(0, 0, 10, 8); TextTrimming = [System.Windows.TextTrimming]::CharacterEllipsis }
+            $hCur = New-Object System.Windows.Controls.TextBlock -Property @{ Text = Get-UiString 'ColCurrentBase'; Foreground = $script:BrushConverter.ConvertFromString($p.TextSecondary); FontWeight = [System.Windows.FontWeights]::Bold; Margin = New-Object System.Windows.Thickness(10, 0, 10, 8) }
             $hInc = New-Object System.Windows.Controls.TextBlock -Property @{ Text = Get-UiString 'ColIncomingValue'; Foreground = $script:BrushConverter.ConvertFromString($p.TextSecondary); FontWeight = [System.Windows.FontWeights]::Bold; Margin = New-Object System.Windows.Thickness(0, 0, 0, 8) }
 
             [System.Windows.Controls.Grid]::SetRow($hApp, 0); [System.Windows.Controls.Grid]::SetColumn($hApp, 0); [void]$grid.Children.Add($hApp)
             [System.Windows.Controls.Grid]::SetRow($hFld, 0); [System.Windows.Controls.Grid]::SetColumn($hFld, 1); [void]$grid.Children.Add($hFld)
-            [System.Windows.Controls.Grid]::SetRow($hCur, 0); [System.Windows.Controls.Grid]::SetColumn($hCur, 2); [void]$grid.Children.Add($hCur)
-            [System.Windows.Controls.Grid]::SetRow($hInc, 0); [System.Windows.Controls.Grid]::SetColumn($hInc, 3); [void]$grid.Children.Add($hInc)
+            [System.Windows.Controls.Grid]::SetRow($hCur, 0); [System.Windows.Controls.Grid]::SetColumn($hCur, 3); [void]$grid.Children.Add($hCur)
+            [System.Windows.Controls.Grid]::SetRow($hInc, 0); [System.Windows.Controls.Grid]::SetColumn($hInc, 4); [void]$grid.Children.Add($hInc)
 
             $rIdx = 1
             foreach ($chg in $rec.Changes) {
@@ -6948,20 +7172,27 @@ function Show-MasterUpdater {
                 # CheckBox for selective update (Q8)
                 $colKey = $chg.BaseColumn
                 $chk = New-Object System.Windows.Controls.CheckBox -Property @{
-                    IsChecked = if ($Item.SelectedCells) { ($Item.SelectedCells[$colKey] -ne $false) } else { $true }
+                    IsChecked = Get-ItemCellSelected $Item $colKey
                     VerticalAlignment = [System.Windows.VerticalAlignment]::Center
                     Margin = New-Object System.Windows.Thickness(0, 4, 10, 4)
+                    Tag = @{ Item = $Item; ColKey = $colKey; Chg = $chg }
                 }
                 [void]$allRowCheckboxes.Add($chk)
                 $chk.add_Checked({
-                    $Item.SelectedCells[$colKey] = $true
-                    $chg.SelectedForUpdate = $true
-                    & $script:UpdateStagingSummary
+                    $ctx = $this.Tag
+                    if ($ctx) {
+                        Set-ItemCellSelected $ctx.Item $ctx.ColKey $true
+                        $ctx.Chg.SelectedForUpdate = $true
+                    }
+                    Invoke-UpdateStagingSummary
                 })
                 $chk.add_Unchecked({
-                    $Item.SelectedCells[$colKey] = $false
-                    $chg.SelectedForUpdate = $false
-                    & $script:UpdateStagingSummary
+                    $ctx = $this.Tag
+                    if ($ctx) {
+                        Set-ItemCellSelected $ctx.Item $ctx.ColKey $false
+                        $ctx.Chg.SelectedForUpdate = $false
+                    }
+                    Invoke-UpdateStagingSummary
                 })
 
                 $txtCol = New-Object System.Windows.Controls.TextBlock -Property @{
@@ -6970,16 +7201,18 @@ function Show-MasterUpdater {
                     FontWeight = [System.Windows.FontWeights]::SemiBold
                     VerticalAlignment = [System.Windows.VerticalAlignment]::Center
                     Margin = New-Object System.Windows.Thickness(0, 4, 10, 4)
+                    TextTrimming = [System.Windows.TextTrimming]::CharacterEllipsis
                 }
 
                 $txtOld = New-Object System.Windows.Controls.TextBlock -Property @{
                     Text = $(if ($chg.OldValue) { $chg.OldValue.ToString() } else { '' })
                     Foreground = $script:BrushConverter.ConvertFromString($p.DiffCellOldFg)
                     VerticalAlignment = [System.Windows.VerticalAlignment]::Center
-                    Margin = New-Object System.Windows.Thickness(0, 4, 10, 4)
+                    Margin = New-Object System.Windows.Thickness(10, 4, 10, 4)
+                    TextWrapping = [System.Windows.TextWrapping]::Wrap
                 }
 
-                $isDirty = ($chg.Contains('CustomEdited') -and $chg.CustomEdited -eq $true)
+                $isDirty = ($chg.PSObject.Properties['CustomEdited'] -and $chg.CustomEdited -eq $true)
                 $bdrBrushHex = if ($isDirty) { $p.AccentBlue } else { $p.DiffCellNewBorder }
                 $bdrThickVal = if ($isDirty) { 2 } else { 1 }
                 $bdrNew = New-Object System.Windows.Controls.Border -Property @{
@@ -7003,6 +7236,8 @@ function Show-MasterUpdater {
                     FontWeight      = [System.Windows.FontWeights]::Bold
                     VerticalAlignment = [System.Windows.VerticalAlignment]::Center
                     Padding         = New-Object System.Windows.Thickness(2, 1, 2, 1)
+                    TextWrapping    = [System.Windows.TextWrapping]::Wrap
+                    AcceptsReturn   = $true
                 }
 
                 $btnRevert = New-Object System.Windows.Controls.Button -Property @{
@@ -7019,38 +7254,45 @@ function Show-MasterUpdater {
                     Visibility      = if ($isDirty) { [System.Windows.Visibility]::Visible } else { [System.Windows.Visibility]::Collapsed }
                 }
 
-                $capturedChg = $chg
-                $capturedBdr = $bdrNew
-                $capturedRevert = $btnRevert
-                $capturedTxt = $txtEditNew
-
+                $txtEditNew.Tag = @{ Chg = $chg; Bdr = $bdrNew; Revert = $btnRevert; Palette = $p }
                 $txtEditNew.add_TextChanged({
-                    $curText = $capturedTxt.Text
-                    $origVal = if ($capturedChg.Contains('OriginalNewValue') -and $null -ne $capturedChg.OriginalNewValue) { $capturedChg.OriginalNewValue.ToString() } else { '' }
-                    $capturedChg.NewValue = $curText
-                    if ($curText -ne $origVal) {
-                        $capturedChg.CustomEdited = $true
-                        $capturedBdr.BorderBrush = $script:BrushConverter.ConvertFromString($p.AccentBlue)
-                        $capturedBdr.BorderThickness = New-Object System.Windows.Thickness(2)
-                        $capturedRevert.Visibility = [System.Windows.Visibility]::Visible
-                    } else {
-                        $capturedChg.CustomEdited = $false
-                        $capturedBdr.BorderBrush = $script:BrushConverter.ConvertFromString($p.DiffCellNewBorder)
-                        $capturedBdr.BorderThickness = New-Object System.Windows.Thickness(1)
-                        $capturedRevert.Visibility = [System.Windows.Visibility]::Collapsed
+                    param($s, $e)
+                    $txtBox = if ($this) { $this } elseif ($s) { $s } else { $null }
+                    $ctx = if ($txtBox) { $txtBox.Tag } else { $null }
+                    if ($ctx) {
+                        $curText = $txtBox.Text
+                        $origVal = Get-ChangeOriginalNewValue $ctx.Chg
+                        $ctx.Chg.NewValue = $curText
+                        if ($curText -ne $origVal) {
+                            Set-ChangeCustomEdited $ctx.Chg $true
+                            $ctx.Bdr.BorderBrush = $script:BrushConverter.ConvertFromString($ctx.Palette.AccentBlue)
+                            $ctx.Bdr.BorderThickness = New-Object System.Windows.Thickness(2)
+                            $ctx.Revert.Visibility = [System.Windows.Visibility]::Visible
+                        } else {
+                            Set-ChangeCustomEdited $ctx.Chg $false
+                            $ctx.Bdr.BorderBrush = $script:BrushConverter.ConvertFromString($ctx.Palette.DiffCellNewBorder)
+                            $ctx.Bdr.BorderThickness = New-Object System.Windows.Thickness(1)
+                            $ctx.Revert.Visibility = [System.Windows.Visibility]::Collapsed
+                        }
                     }
-                    & $script:UpdateStagingSummary
+                    Invoke-UpdateStagingSummary
                 })
 
+                $btnRevert.Tag = @{ Chg = $chg; Txt = $txtEditNew; Bdr = $bdrNew; Palette = $p }
                 $btnRevert.add_Click({
-                    $origVal = if ($capturedChg.Contains('OriginalNewValue') -and $null -ne $capturedChg.OriginalNewValue) { $capturedChg.OriginalNewValue.ToString() } else { '' }
-                    $capturedTxt.Text = $origVal
-                    $capturedChg.NewValue = $origVal
-                    $capturedChg.CustomEdited = $false
-                    $capturedBdr.BorderBrush = $script:BrushConverter.ConvertFromString($p.DiffCellNewBorder)
-                    $capturedBdr.BorderThickness = New-Object System.Windows.Thickness(1)
-                    $capturedRevert.Visibility = [System.Windows.Visibility]::Collapsed
-                    & $script:UpdateStagingSummary
+                    param($s, $e)
+                    $btn = if ($this) { $this } elseif ($s) { $s } else { $null }
+                    $ctx = if ($btn) { $btn.Tag } else { $null }
+                    if ($ctx) {
+                        $origVal = Get-ChangeOriginalNewValue $ctx.Chg
+                        $ctx.Txt.Text = $origVal
+                        $ctx.Chg.NewValue = $origVal
+                        Set-ChangeCustomEdited $ctx.Chg $false
+                        $ctx.Bdr.BorderBrush = $script:BrushConverter.ConvertFromString($ctx.Palette.DiffCellNewBorder)
+                        $ctx.Bdr.BorderThickness = New-Object System.Windows.Thickness(1)
+                        $btn.Visibility = [System.Windows.Visibility]::Collapsed
+                    }
+                    Invoke-UpdateStagingSummary
                 })
 
                 [System.Windows.Controls.Grid]::SetColumn($txtEditNew, 0)
@@ -7061,9 +7303,21 @@ function Show-MasterUpdater {
 
                 [System.Windows.Controls.Grid]::SetRow($chk, $rIdx); [System.Windows.Controls.Grid]::SetColumn($chk, 0); [void]$grid.Children.Add($chk)
                 [System.Windows.Controls.Grid]::SetRow($txtCol, $rIdx); [System.Windows.Controls.Grid]::SetColumn($txtCol, 1); [void]$grid.Children.Add($txtCol)
-                [System.Windows.Controls.Grid]::SetRow($txtOld, $rIdx); [System.Windows.Controls.Grid]::SetColumn($txtOld, 2); [void]$grid.Children.Add($txtOld)
-                [System.Windows.Controls.Grid]::SetRow($bdrNew, $rIdx); [System.Windows.Controls.Grid]::SetColumn($bdrNew, 3); [void]$grid.Children.Add($bdrNew)
+                [System.Windows.Controls.Grid]::SetRow($txtOld, $rIdx); [System.Windows.Controls.Grid]::SetColumn($txtOld, 3); [void]$grid.Children.Add($txtOld)
+                [System.Windows.Controls.Grid]::SetRow($bdrNew, $rIdx); [System.Windows.Controls.Grid]::SetColumn($bdrNew, 4); [void]$grid.Children.Add($bdrNew)
                 $rIdx++
+            }
+            if ($rIdx -gt 1) {
+                $splitter = New-Object System.Windows.Controls.GridSplitter -Property @{
+                    Width = 5
+                    HorizontalAlignment = [System.Windows.HorizontalAlignment]::Center
+                    VerticalAlignment = [System.Windows.VerticalAlignment]::Stretch
+                    Background = [System.Windows.Media.Brushes]::Transparent
+                    Cursor = [System.Windows.Input.Cursors]::SizeWE
+                }
+                [System.Windows.Controls.Grid]::SetRowSpan($splitter, $rIdx)
+                [System.Windows.Controls.Grid]::SetColumn($splitter, 2)
+                [void]$grid.Children.Add($splitter)
             }
             [void]$panelDiffContainer.Children.Add($grid)
 
@@ -7099,13 +7353,33 @@ function Show-MasterUpdater {
                     Cursor          = [System.Windows.Input.Cursors]::Hand
                 }
                 $allRowCheckboxes = [System.Collections.Generic.List[object]]::new()
+                $btnSelAllRow.Tag = @{ Item = $Item; Boxes = $allRowCheckboxes }
                 $btnSelAllRow.add_Click({
-                    foreach ($c in $allRowCheckboxes) { $c.IsChecked = $true }
-                    & $script:UpdateStagingSummary
+                    $ctx = $this.Tag
+                    if ($ctx) {
+                        foreach ($c in $ctx.Boxes) { $c.IsChecked = $true }
+                        if ($ctx.Item.Record -and $ctx.Item.Record.Changes) {
+                            foreach ($ch in $ctx.Item.Record.Changes) {
+                                Set-ItemCellSelected $ctx.Item $ch.BaseColumn $true
+                                $ch.SelectedForUpdate = $true
+                            }
+                        }
+                    }
+                    Invoke-UpdateStagingSummary
                 })
+                $btnDeselAllRow.Tag = @{ Item = $Item; Boxes = $allRowCheckboxes }
                 $btnDeselAllRow.add_Click({
-                    foreach ($c in $allRowCheckboxes) { $c.IsChecked = $false }
-                    & $script:UpdateStagingSummary
+                    $ctx = $this.Tag
+                    if ($ctx) {
+                        foreach ($c in $ctx.Boxes) { $c.IsChecked = $false }
+                        if ($ctx.Item.Record -and $ctx.Item.Record.Changes) {
+                            foreach ($ch in $ctx.Item.Record.Changes) {
+                                Set-ItemCellSelected $ctx.Item $ch.BaseColumn $false
+                                $ch.SelectedForUpdate = $false
+                            }
+                        }
+                    }
+                    Invoke-UpdateStagingSummary
                 })
                 [void]$spRowTools.Children.Add($btnSelAllRow)
                 [void]$spRowTools.Children.Add($btnDeselAllRow)
@@ -7115,40 +7389,48 @@ function Show-MasterUpdater {
                 $grid = New-Object System.Windows.Controls.Grid
                 $grid.Margin = New-Object System.Windows.Thickness(0, 0, 0, 0)
                 [void]$grid.ColumnDefinitions.Add((New-Object System.Windows.Controls.ColumnDefinition -Property @{ Width = [System.Windows.GridLength]::Auto }))
-                [void]$grid.ColumnDefinitions.Add((New-Object System.Windows.Controls.ColumnDefinition -Property @{ Width = [System.Windows.GridLength]::new(180) }))
+                [void]$grid.ColumnDefinitions.Add((New-Object System.Windows.Controls.ColumnDefinition -Property @{ Width = [System.Windows.GridLength]::new(250) }))
+                [void]$grid.ColumnDefinitions.Add((New-Object System.Windows.Controls.ColumnDefinition -Property @{ Width = [System.Windows.GridLength]::Auto }))
                 [void]$grid.ColumnDefinitions.Add((New-Object System.Windows.Controls.ColumnDefinition -Property @{ Width = [System.Windows.GridLength]::new(1, [System.Windows.GridUnitType]::Star) }))
                 [void]$grid.ColumnDefinitions.Add((New-Object System.Windows.Controls.ColumnDefinition -Property @{ Width = [System.Windows.GridLength]::new(1, [System.Windows.GridUnitType]::Star) }))
 
                 [void]$grid.RowDefinitions.Add((New-Object System.Windows.Controls.RowDefinition -Property @{ Height = [System.Windows.GridLength]::Auto }))
                 $hApp = New-Object System.Windows.Controls.TextBlock -Property @{ Text = Get-UiString 'ColApply'; Foreground = $script:BrushConverter.ConvertFromString($p.TextSecondary); FontWeight = [System.Windows.FontWeights]::Bold; Margin = New-Object System.Windows.Thickness(0, 0, 10, 8) }
-                $hFld = New-Object System.Windows.Controls.TextBlock -Property @{ Text = Get-UiString 'ColField'; Foreground = $script:BrushConverter.ConvertFromString($p.TextSecondary); FontWeight = [System.Windows.FontWeights]::Bold; Margin = New-Object System.Windows.Thickness(0, 0, 10, 8) }
-                $hCur = New-Object System.Windows.Controls.TextBlock -Property @{ Text = Get-UiString 'ColCurrentBase'; Foreground = $script:BrushConverter.ConvertFromString($p.TextSecondary); FontWeight = [System.Windows.FontWeights]::Bold; Margin = New-Object System.Windows.Thickness(0, 0, 10, 8) }
+                $hFld = New-Object System.Windows.Controls.TextBlock -Property @{ Text = Get-UiString 'ColField'; Foreground = $script:BrushConverter.ConvertFromString($p.TextSecondary); FontWeight = [System.Windows.FontWeights]::Bold; Margin = New-Object System.Windows.Thickness(0, 0, 10, 8); TextTrimming = [System.Windows.TextTrimming]::CharacterEllipsis }
+                $hCur = New-Object System.Windows.Controls.TextBlock -Property @{ Text = Get-UiString 'ColCurrentBase'; Foreground = $script:BrushConverter.ConvertFromString($p.TextSecondary); FontWeight = [System.Windows.FontWeights]::Bold; Margin = New-Object System.Windows.Thickness(10, 0, 10, 8) }
                 $hInc = New-Object System.Windows.Controls.TextBlock -Property @{ Text = Get-UiString 'ColIncomingValue'; Foreground = $script:BrushConverter.ConvertFromString($p.TextSecondary); FontWeight = [System.Windows.FontWeights]::Bold; Margin = New-Object System.Windows.Thickness(0, 0, 0, 8) }
 
                 [System.Windows.Controls.Grid]::SetRow($hApp, 0); [System.Windows.Controls.Grid]::SetColumn($hApp, 0); [void]$grid.Children.Add($hApp)
                 [System.Windows.Controls.Grid]::SetRow($hFld, 0); [System.Windows.Controls.Grid]::SetColumn($hFld, 1); [void]$grid.Children.Add($hFld)
-                [System.Windows.Controls.Grid]::SetRow($hCur, 0); [System.Windows.Controls.Grid]::SetColumn($hCur, 2); [void]$grid.Children.Add($hCur)
-                [System.Windows.Controls.Grid]::SetRow($hInc, 0); [System.Windows.Controls.Grid]::SetColumn($hInc, 3); [void]$grid.Children.Add($hInc)
+                [System.Windows.Controls.Grid]::SetRow($hCur, 0); [System.Windows.Controls.Grid]::SetColumn($hCur, 3); [void]$grid.Children.Add($hCur)
+                [System.Windows.Controls.Grid]::SetRow($hInc, 0); [System.Windows.Controls.Grid]::SetColumn($hInc, 4); [void]$grid.Children.Add($hInc)
 
                 $rIdx = 1
                 foreach ($chg in $rec.Changes) {
                     [void]$grid.RowDefinitions.Add((New-Object System.Windows.Controls.RowDefinition -Property @{ Height = [System.Windows.GridLength]::Auto }))
                     $colKey = $chg.BaseColumn
                     $chk = New-Object System.Windows.Controls.CheckBox -Property @{
-                        IsChecked = if ($Item.SelectedCells) { ($Item.SelectedCells[$colKey] -ne $false) } else { $true }
+                        IsChecked = Get-ItemCellSelected $Item $colKey
                         VerticalAlignment = [System.Windows.VerticalAlignment]::Center
                         Margin = New-Object System.Windows.Thickness(0, 4, 10, 4)
+                        Tag = @{ Item = $Item; ColKey = $colKey; Chg = $chg }
                     }
                     [void]$allRowCheckboxes.Add($chk)
                     $chk.add_Checked({
-                        $Item.SelectedCells[$colKey] = $true
-                        $chg.SelectedForUpdate = $true
-                        & $script:UpdateStagingSummary
+                        $ctx = $this.Tag
+                        if ($ctx) {
+                            Set-ItemCellSelected $ctx.Item $ctx.ColKey $true
+                            $ctx.Chg.SelectedForUpdate = $true
+                        }
+                        Invoke-UpdateStagingSummary
                     })
                     $chk.add_Unchecked({
-                        $Item.SelectedCells[$colKey] = $false
-                        $chg.SelectedForUpdate = $false
-                        & $script:UpdateStagingSummary
+                        $ctx = $this.Tag
+                        if ($ctx) {
+                            Set-ItemCellSelected $ctx.Item $ctx.ColKey $false
+                            $ctx.Chg.SelectedForUpdate = $false
+                        }
+                        Invoke-UpdateStagingSummary
                     })
 
                     $txtCol = New-Object System.Windows.Controls.TextBlock -Property @{
@@ -7157,15 +7439,17 @@ function Show-MasterUpdater {
                         FontWeight = [System.Windows.FontWeights]::SemiBold
                         VerticalAlignment = [System.Windows.VerticalAlignment]::Center
                         Margin = New-Object System.Windows.Thickness(0, 4, 10, 4)
+                        TextTrimming = [System.Windows.TextTrimming]::CharacterEllipsis
                     }
                     $txtOld = New-Object System.Windows.Controls.TextBlock -Property @{
                         Text = $(if ($null -ne $chg.OldValue) { $chg.OldValue.ToString() } else { '' })
                         Foreground = $script:BrushConverter.ConvertFromString($p.DiffCellOldFg)
                         VerticalAlignment = [System.Windows.VerticalAlignment]::Center
-                        Margin = New-Object System.Windows.Thickness(0, 4, 10, 4)
+                        Margin = New-Object System.Windows.Thickness(10, 4, 10, 4)
+                        TextWrapping = [System.Windows.TextWrapping]::Wrap
                     }
 
-                    $isDirty = ($chg.Contains('CustomEdited') -and $chg.CustomEdited -eq $true)
+                    $isDirty = ($chg.PSObject.Properties['CustomEdited'] -and $chg.CustomEdited -eq $true)
                     $bdrBrushHex = if ($isDirty) { $p.AccentBlue } else { $p.DiffCellNewBorder }
                     $bdrThickVal = if ($isDirty) { 2 } else { 1 }
                     $bdrNew = New-Object System.Windows.Controls.Border -Property @{
@@ -7189,6 +7473,8 @@ function Show-MasterUpdater {
                         FontWeight      = [System.Windows.FontWeights]::Bold
                         VerticalAlignment = [System.Windows.VerticalAlignment]::Center
                         Padding         = New-Object System.Windows.Thickness(2, 1, 2, 1)
+                        TextWrapping    = [System.Windows.TextWrapping]::Wrap
+                        AcceptsReturn   = $true
                     }
 
                     $btnRevert = New-Object System.Windows.Controls.Button -Property @{
@@ -7205,38 +7491,45 @@ function Show-MasterUpdater {
                         Visibility      = if ($isDirty) { [System.Windows.Visibility]::Visible } else { [System.Windows.Visibility]::Collapsed }
                     }
 
-                    $capturedChg = $chg
-                    $capturedBdr = $bdrNew
-                    $capturedRevert = $btnRevert
-                    $capturedTxt = $txtEditNew
-
+                    $txtEditNew.Tag = @{ Chg = $chg; Bdr = $bdrNew; Revert = $btnRevert; Palette = $p }
                     $txtEditNew.add_TextChanged({
-                        $curText = $capturedTxt.Text
-                        $origVal = if ($capturedChg.Contains('OriginalNewValue') -and $null -ne $capturedChg.OriginalNewValue) { $capturedChg.OriginalNewValue.ToString() } else { '' }
-                        $capturedChg.NewValue = $curText
-                        if ($curText -ne $origVal) {
-                            $capturedChg.CustomEdited = $true
-                            $capturedBdr.BorderBrush = $script:BrushConverter.ConvertFromString($p.AccentBlue)
-                            $capturedBdr.BorderThickness = New-Object System.Windows.Thickness(2)
-                            $capturedRevert.Visibility = [System.Windows.Visibility]::Visible
-                        } else {
-                            $capturedChg.CustomEdited = $false
-                            $capturedBdr.BorderBrush = $script:BrushConverter.ConvertFromString($p.DiffCellNewBorder)
-                            $capturedBdr.BorderThickness = New-Object System.Windows.Thickness(1)
-                            $capturedRevert.Visibility = [System.Windows.Visibility]::Collapsed
+                        param($s, $e)
+                        $txtBox = if ($this) { $this } elseif ($s) { $s } else { $null }
+                        $ctx = if ($txtBox) { $txtBox.Tag } else { $null }
+                        if ($ctx) {
+                            $curText = $txtBox.Text
+                            $origVal = Get-ChangeOriginalNewValue $ctx.Chg
+                            $ctx.Chg.NewValue = $curText
+                            if ($curText -ne $origVal) {
+                                Set-ChangeCustomEdited $ctx.Chg $true
+                                $ctx.Bdr.BorderBrush = $script:BrushConverter.ConvertFromString($ctx.Palette.AccentBlue)
+                                $ctx.Bdr.BorderThickness = New-Object System.Windows.Thickness(2)
+                                $ctx.Revert.Visibility = [System.Windows.Visibility]::Visible
+                            } else {
+                                Set-ChangeCustomEdited $ctx.Chg $false
+                                $ctx.Bdr.BorderBrush = $script:BrushConverter.ConvertFromString($ctx.Palette.DiffCellNewBorder)
+                                $ctx.Bdr.BorderThickness = New-Object System.Windows.Thickness(1)
+                                $ctx.Revert.Visibility = [System.Windows.Visibility]::Collapsed
+                            }
                         }
-                        & $script:UpdateStagingSummary
+                        Invoke-UpdateStagingSummary
                     })
 
+                    $btnRevert.Tag = @{ Chg = $chg; Txt = $txtEditNew; Bdr = $bdrNew; Palette = $p }
                     $btnRevert.add_Click({
-                        $origVal = if ($capturedChg.Contains('OriginalNewValue') -and $null -ne $capturedChg.OriginalNewValue) { $capturedChg.OriginalNewValue.ToString() } else { '' }
-                        $capturedTxt.Text = $origVal
-                        $capturedChg.NewValue = $origVal
-                        $capturedChg.CustomEdited = $false
-                        $capturedBdr.BorderBrush = $script:BrushConverter.ConvertFromString($p.DiffCellNewBorder)
-                        $capturedBdr.BorderThickness = New-Object System.Windows.Thickness(1)
-                        $capturedRevert.Visibility = [System.Windows.Visibility]::Collapsed
-                        & $script:UpdateStagingSummary
+                        param($s, $e)
+                        $btn = if ($this) { $this } elseif ($s) { $s } else { $null }
+                        $ctx = if ($btn) { $btn.Tag } else { $null }
+                        if ($ctx) {
+                            $origVal = Get-ChangeOriginalNewValue $ctx.Chg
+                            $ctx.Txt.Text = $origVal
+                            $ctx.Chg.NewValue = $origVal
+                            Set-ChangeCustomEdited $ctx.Chg $false
+                            $ctx.Bdr.BorderBrush = $script:BrushConverter.ConvertFromString($ctx.Palette.DiffCellNewBorder)
+                            $ctx.Bdr.BorderThickness = New-Object System.Windows.Thickness(1)
+                            $btn.Visibility = [System.Windows.Visibility]::Collapsed
+                        }
+                        Invoke-UpdateStagingSummary
                     })
 
                     [System.Windows.Controls.Grid]::SetColumn($txtEditNew, 0)
@@ -7247,10 +7540,24 @@ function Show-MasterUpdater {
 
                     [System.Windows.Controls.Grid]::SetRow($chk, $rIdx); [System.Windows.Controls.Grid]::SetColumn($chk, 0); [void]$grid.Children.Add($chk)
                     [System.Windows.Controls.Grid]::SetRow($txtCol, $rIdx); [System.Windows.Controls.Grid]::SetColumn($txtCol, 1); [void]$grid.Children.Add($txtCol)
-                    [System.Windows.Controls.Grid]::SetRow($txtOld, $rIdx); [System.Windows.Controls.Grid]::SetColumn($txtOld, 2); [void]$grid.Children.Add($txtOld)
-                    [System.Windows.Controls.Grid]::SetRow($bdrNew, $rIdx); [System.Windows.Controls.Grid]::SetColumn($bdrNew, 3); [void]$grid.Children.Add($bdrNew)
+                    [System.Windows.Controls.Grid]::SetRow($txtOld, $rIdx); [System.Windows.Controls.Grid]::SetColumn($txtOld, 3); [void]$grid.Children.Add($txtOld)
+                    [System.Windows.Controls.Grid]::SetRow($bdrNew, $rIdx); [System.Windows.Controls.Grid]::SetColumn($bdrNew, 4); [void]$grid.Children.Add($bdrNew)
                     $rIdx++
                 }
+                
+                if ($rIdx -gt 1) {
+                    $splitter = New-Object System.Windows.Controls.GridSplitter -Property @{
+                        Width = 5
+                        HorizontalAlignment = [System.Windows.HorizontalAlignment]::Center
+                        VerticalAlignment = [System.Windows.VerticalAlignment]::Stretch
+                        Background = [System.Windows.Media.Brushes]::Transparent
+                        Cursor = [System.Windows.Input.Cursors]::SizeWE
+                    }
+                    [System.Windows.Controls.Grid]::SetRowSpan($splitter, $rIdx)
+                    [System.Windows.Controls.Grid]::SetColumn($splitter, 2)
+                    [void]$grid.Children.Add($splitter)
+                }
+                
                 [void]$panelDiffContainer.Children.Add($grid)
             } else {
                 $infoTxt = New-Object System.Windows.Controls.TextBlock -Property @{
@@ -7314,37 +7621,43 @@ function Show-MasterUpdater {
                     Margin = New-Object System.Windows.Thickness(0, 0, 12, 0)
                 }
 
-                $capturedCand = $cand
+                $candBtn.Tag = @{ Cand = $cand; Item = $Item; Rec = $rec }
                 $candBtn.add_Click({
-                    $rec.MatchedBaseRow = $capturedCand
-                    $rec.Status = 'Changed'
-                    $Item.StatusText = Get-UiString 'StatusBadgeChanged'
-                    $bColors = Get-StatusBadgeColors 'Changed' $script:CurrentTheme
-                    $Item.StatusBg = $bColors.Bg
-                    $Item.StatusFg = $bColors.Fg
-                    # Recompute diffs with exact ColIndex and CellRef coordinates
-                    $newDiffs = [System.Collections.Generic.List[object]]::new()
-                    foreach ($k in $rec.ProjectedRow.Keys) {
-                        $oldVal = if ($capturedCand.Values.ContainsKey($k)) { $capturedCand.Values[$k] } else { '' }
-                        $newVal = $rec.ProjectedRow[$k]
-                        if (-not [FastDiffHelper]::AreEqual($oldVal, $newVal, $true, $true, $true, $true)) {
-                            $colIdx = if ($script:BaseHeaders) { [System.Array]::IndexOf($script:BaseHeaders, $k) } else { -1 }
-                            $colLetter = if ($colIdx -ge 0) { [FastExcelHelper]::ColIndexToName($colIdx) } else { '' }
-                            $cellRef = if ($colLetter) { "$colLetter$($capturedCand.RowNumber)" } else { '' }
-                            $newDiffs.Add([PSCustomObject]@{
-                                BaseColumn        = $k
-                                ColIndex          = $colIdx
-                                CellRef           = $cellRef
-                                OldValue          = $oldVal
-                                NewValue          = $newVal
-                                SelectedForUpdate = $true
-                            })
-                            if (-not $Item.SelectedCells) { $Item.SelectedCells = @{} }; $Item.SelectedCells[$k] = $true
+                    $ctx = $this.Tag
+                    if ($ctx) {
+                        $ctx.Rec.MatchedBaseRow = $ctx.Cand
+                        $ctx.Rec.Status = 'Changed'
+                        $ctx.Item.StatusText = Get-UiString 'StatusBadgeChanged'
+                        $bColors = Get-StatusBadgeColors 'Changed' $script:CurrentTheme
+                        $ctx.Item.StatusBg = $bColors.Bg
+                        $ctx.Item.StatusFg = $bColors.Fg
+                        # Recompute diffs with exact ColIndex and CellRef coordinates
+                        $newDiffs = [System.Collections.Generic.List[object]]::new()
+                        foreach ($k in $ctx.Rec.ProjectedRow.Keys) {
+                            $oldVal = if ($ctx.Cand.Values.ContainsKey($k)) { $ctx.Cand.Values[$k] } else { '' }
+                            $newVal = $ctx.Rec.ProjectedRow[$k]
+                            if (-not [FastDiffHelper]::AreEqual($oldVal, $newVal, $true, $true, $true, $true)) {
+                                $colIdx = if ($script:BaseHeaders) { [System.Array]::IndexOf($script:BaseHeaders, $k) } else { -1 }
+                                $colLetter = if ($colIdx -ge 0) { [FastExcelHelper]::ColIndexToName($colIdx) } else { '' }
+                                $cellRef = if ($colLetter) { "$colLetter$($ctx.Cand.RowNumber)" } else { '' }
+                                $newDiffs.Add([PSCustomObject]@{
+                                    BaseColumn        = $k
+                                    ColIndex          = $colIdx
+                                    CellRef           = $cellRef
+                                    OldValue          = $oldVal
+                                    NewValue          = $newVal
+                                    SelectedForUpdate = $true
+                                    OriginalNewValue  = $newVal
+                                    CustomEdited      = $false
+                                })
+                                Set-ItemCellSelected $ctx.Item $k $true
+                            }
                         }
+                        $ctx.Rec.Changes = $newDiffs
+                        & $RenderDetailPane $ctx.Item
+                        & $UpdateCounters
+                        Invoke-UpdateStagingSummary
                     }
-                    $rec.Changes = $newDiffs
-                    & $RenderDetailPane $Item
-                    & $UpdateCounters
                 })
 
                 $candSummaryValues = ($cand.Values.GetEnumerator() | Select-Object -First 4 | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join ', '
@@ -7380,6 +7693,7 @@ function Show-MasterUpdater {
                 $Item.StatusFg = $bColors.Fg
                 & $RenderDetailPane $Item
                 & $UpdateCounters
+                Invoke-UpdateStagingSummary
             })
             [void]$panelDiffContainer.Children.Add($btnTreatNew)
         }
@@ -7393,21 +7707,25 @@ function Show-MasterUpdater {
     # Render Full Base Row DataGrid
     $script:RenderFullBaseRow = $RenderFullBaseRow = {
         param($Item)
-        if (-not $baseRowBorder) {
-            $baseRowBorder = if ($window) { $window.FindName('baseRowBorder') } else { $script:ActiveWindow.FindName('baseRowBorder') }
-        }
-        if (-not $dgBaseFullRow) {
-            $dgBaseFullRow = if ($window) { $window.FindName('dgBaseFullRow') } else { $script:ActiveWindow.FindName('dgBaseFullRow') }
-        }
-        if (-not $txtBaseRowHeader) {
-            $txtBaseRowHeader = if ($window) { $window.FindName('txtBaseRowHeader') } else { $script:ActiveWindow.FindName('txtBaseRowHeader') }
-        }
+        $baseRowBorder = if ($window) { $window.FindName('baseRowBorder') } elseif ($script:ActiveWindow) { $script:ActiveWindow.FindName('baseRowBorder') } else { $null }
+        $dgBaseFullRow = if ($window) { $window.FindName('dgBaseFullRow') } elseif ($script:ActiveWindow) { $script:ActiveWindow.FindName('dgBaseFullRow') } else { $null }
+        $txtBaseRowHeader = if ($window) { $window.FindName('txtBaseRowHeader') } elseif ($script:ActiveWindow) { $script:ActiveWindow.FindName('txtBaseRowHeader') } else { $null }
         if (-not $Item -or -not $script:BaseHeaders -or $script:BaseHeaders.Count -eq 0) {
             if ($baseRowBorder) { $baseRowBorder.Visibility = [System.Windows.Visibility]::Collapsed }
             return
         }
 
-        if ($Item -and -not $Item.SelectedCells) { $Item.SelectedCells = @{} }
+        if ($Item) {
+            if ($Item -is [System.Collections.IDictionary]) {
+                if ($null -eq $Item['SelectedCells']) { $Item['SelectedCells'] = @{} }
+            } else {
+                if (-not $Item.PSObject.Properties['SelectedCells']) {
+                    $Item.PSObject.Properties.Add([System.Management.Automation.PSNoteProperty]::new('SelectedCells', @{}))
+                } elseif ($null -eq $Item.SelectedCells) {
+                    $Item.SelectedCells = @{}
+                }
+            }
+        }
         $rec = $Item.Record
         $hasBaseRow = ($null -ne $rec.MatchedBaseRow)
         $isNew = ($rec.Status -eq 'New')
@@ -7502,9 +7820,11 @@ function Show-MasterUpdater {
                 OldValue          = $oldVal
                 NewValue          = $newVal
                 SelectedForUpdate = $true
+                OriginalNewValue  = $newVal
+                CustomEdited      = $false
             })
         }
-        if (-not $sel.SelectedCells) { $sel.SelectedCells = @{} }; $sel.SelectedCells[$colName] = $true
+        Set-ItemCellSelected $sel $colName $true
 
         if ($rec.Status -eq 'Unchanged') {
             $rec.Status = 'Changed'
@@ -7545,12 +7865,13 @@ function Show-MasterUpdater {
             if ($itemToRender -and $script:RenderDetailPane) {
                 & $script:RenderDetailPane $itemToRender -SkipBaseRowRefresh
             }
-        }.GetNewClosure())
+            Invoke-UpdateStagingSummary
+        })
     })
 
     # Selection changed on Review list
     $lbReviewItems.add_SelectionChanged({
-        if ($script:_suppressSelectionRender) { return }
+        if ($script:_suppressSelectionRender -eq $true) { return }
         if ($lbReviewItems.SelectedItem) {
             & $RenderDetailPane $lbReviewItems.SelectedItem
             $lbReviewItems.ScrollIntoView($lbReviewItems.SelectedItem)
@@ -7567,11 +7888,15 @@ function Show-MasterUpdater {
     # Filter & Search logic
     $ApplyFilterAndSearch = {
         if (-not $script:AllReviewItems) { return }
-        $filterTag = if ($cmbFilterStatus.SelectedItem -is [System.Windows.Controls.ComboBoxItem]) {
-            $cmbFilterStatus.SelectedItem.Tag
+        $cmb = if ($window) { $window.FindName('cmbFilterStatus') } elseif ($script:ActiveWindow) { $script:ActiveWindow.FindName('cmbFilterStatus') } else { $null }
+        $filterTag = if ($cmb -and $cmb.SelectedItem -is [System.Windows.Controls.ComboBoxItem]) {
+            $cmb.SelectedItem.Tag
+        } elseif ($cmb -and $cmb.SelectedItem) {
+            $cmb.SelectedItem.ToString()
         } else { 'All' }
 
-        $searchQuery = if ($txtSearchReview.Text) { $txtSearchReview.Text.Trim().ToLowerInvariant() } else { '' }
+        $txtS = if ($window) { $window.FindName('txtSearchReview') } elseif ($script:ActiveWindow) { $script:ActiveWindow.FindName('txtSearchReview') } else { $null }
+        $searchQuery = if ($txtS -and $txtS.Text) { $txtS.Text.Trim().ToLowerInvariant() } else { '' }
 
         $filtered = $script:AllReviewItems | Where-Object {
             $item = $_
@@ -7595,9 +7920,12 @@ function Show-MasterUpdater {
             return ($titleMatch -or $subMatch)
         }
 
-        $lbReviewItems.ItemsSource = @($filtered)
-        if ($lbReviewItems.Items.Count -gt 0) {
-            $lbReviewItems.SelectedIndex = 0
+        $lb = if ($window) { $window.FindName('lbReviewItems') } elseif ($script:ActiveWindow) { $script:ActiveWindow.FindName('lbReviewItems') } else { $null }
+        if ($lb) {
+            $lb.ItemsSource = @($filtered)
+            if ($lb.Items.Count -gt 0) {
+                $lb.SelectedIndex = 0
+            }
         }
     }
     $script:ApplyFilterAndSearch = $ApplyFilterAndSearch
@@ -7606,8 +7934,38 @@ function Show-MasterUpdater {
     $script:PopulateReviewItems = {
         if (-not $script:ComparisonResult) { return }
 
-        $incKeys = [string[]]@($script:MappingRules | Where-Object { $_.IsJoinKey } | ForEach-Object { $_.IncomingColumn })
-        $baseKeys = [string[]]@($script:MappingRules | Where-Object { $_.IsJoinKey } | ForEach-Object { $_.BaseColumn })
+        $incKeys = if ($lbJoinIncoming -and $lbJoinIncoming.SelectedItems -and $lbJoinIncoming.SelectedItems.Count -gt 0) {
+            [string[]]@($lbJoinIncoming.SelectedItems | ForEach-Object { $_.ToString() })
+        } else {
+            [string[]]@()
+        }
+        $baseKeys = if ($lbJoinBase -and $lbJoinBase.SelectedItems -and $lbJoinBase.SelectedItems.Count -gt 0) {
+            [string[]]@($lbJoinBase.SelectedItems | ForEach-Object { $_.ToString() })
+        } else {
+            [string[]]@()
+        }
+        if ($incKeys.Length -eq 0 -and $script:MappingRules) {
+            $incKeys = [string[]]@($script:MappingRules | Where-Object {
+                if ($_ -is [System.Collections.IDictionary]) { $_['IsJoinKey'] -eq $true }
+                elseif ($_.PSObject.Properties['IsJoinKey']) { $_.IsJoinKey -eq $true }
+                else { $false }
+            } | ForEach-Object {
+                if ($_ -is [System.Collections.IDictionary]) { $_['IncomingColumn'] }
+                elseif ($_.PSObject.Properties['IncomingColumn']) { $_.IncomingColumn }
+                elseif ($_.PSObject.Properties['UpdateColumns']) { $_.UpdateColumns[0] }
+            })
+        }
+        if ($baseKeys.Length -eq 0 -and $script:MappingRules) {
+            $baseKeys = [string[]]@($script:MappingRules | Where-Object {
+                if ($_ -is [System.Collections.IDictionary]) { $_['IsJoinKey'] -eq $true }
+                elseif ($_.PSObject.Properties['IsJoinKey']) { $_.IsJoinKey -eq $true }
+                else { $false }
+            } | ForEach-Object {
+                if ($_ -is [System.Collections.IDictionary]) { $_['BaseColumn'] }
+                elseif ($_.PSObject.Properties['BaseColumn']) { $_.BaseColumn }
+                elseif ($_.PSObject.Properties['BaseColumns']) { $_.BaseColumns[0] }
+            })
+        }
         $showUnchanged = if ($chkShowUnchanged) { ($chkShowUnchanged.IsChecked -eq $true) } else { ($script:AppConfig.ShowUnchangedRows -eq $true -or $script:AppConfig.AutoSkipUnchanged -eq $false) }
 
         # Preserve existing decisions and cell selections across toggles
@@ -7680,7 +8038,7 @@ function Show-MasterUpdater {
             }
 
             $cellMap = @{}
-            if ($existingCells.ContainsKey($r)) {
+            if ($existingCells.ContainsKey($r) -and $null -ne $existingCells[$r]) {
                 $cellMap = $existingCells[$r]
             } elseif ($r.Changes) {
                 foreach ($c in $r.Changes) { $cellMap[$c.BaseColumn] = $true }
@@ -7702,11 +8060,15 @@ function Show-MasterUpdater {
 
         & $script:ApplyFilterAndSearch
         & $script:UpdateCounters
-        if ($btnApplyAccepted) {
-            $btnApplyAccepted.IsEnabled = ($script:AllReviewItems | Where-Object { $_.Decision -eq 'Accepted' }).Count -gt 0
+        $w = if ($window) { $window } elseif ($script:ActiveWindow) { $script:ActiveWindow } else { $null }
+        $btnApply = if ($w) { $w.FindName('btnApplyAccepted') } else { $null }
+        if ($btnApply) {
+            $btnApply.IsEnabled = (@($script:AllReviewItems | Where-Object { $_.Decision -eq 'Accepted' })).Count -gt 0
         }
 
         # Populate Batch Column Toggles
+        $wrapBatchColToggles = if ($w) { $w.FindName('wrapBatchColToggles') } else { $null }
+        $cardBatchToggles = if ($w) { $w.FindName('cardBatchToggles') } else { $null }
         if ($wrapBatchColToggles -and $cardBatchToggles) {
             $wrapBatchColToggles.Children.Clear()
             $uniqueCols = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
@@ -7731,11 +8093,11 @@ function Show-MasterUpdater {
                         Margin          = New-Object System.Windows.Thickness(0, 0, 12, 4)
                         Cursor          = [System.Windows.Input.Cursors]::Hand
                     }
-                    $capturedCol = $colName
+                    $chkCol.Tag = $colName
                     $chkCol.add_Checked({
-                        $colToToggle = $capturedCol
+                        $colToToggle = $this.Tag
                         foreach ($item in $script:AllReviewItems) {
-                            if ($item.SelectedCells) { $item.SelectedCells[$colToToggle] = $true }
+                            Set-ItemCellSelected $item $colToToggle $true
                             if ($item.Record -and $item.Record.Changes) {
                                 foreach ($c in $item.Record.Changes) {
                                     if ($c.BaseColumn -eq $colToToggle) { $c.SelectedForUpdate = $true }
@@ -7743,12 +8105,12 @@ function Show-MasterUpdater {
                             }
                         }
                         if ($lbReviewItems.SelectedItem) { & $RenderDetailPane $lbReviewItems.SelectedItem }
-                        & $script:UpdateStagingSummary
+                        Invoke-UpdateStagingSummary
                     })
                     $chkCol.add_Unchecked({
-                        $colToToggle = $capturedCol
+                        $colToToggle = $this.Tag
                         foreach ($item in $script:AllReviewItems) {
-                            if ($item.SelectedCells) { $item.SelectedCells[$colToToggle] = $false }
+                            Set-ItemCellSelected $item $colToToggle $false
                             if ($item.Record -and $item.Record.Changes) {
                                 foreach ($c in $item.Record.Changes) {
                                     if ($c.BaseColumn -eq $colToToggle) { $c.SelectedForUpdate = $false }
@@ -7756,7 +8118,7 @@ function Show-MasterUpdater {
                             }
                         }
                         if ($lbReviewItems.SelectedItem) { & $RenderDetailPane $lbReviewItems.SelectedItem }
-                        & $script:UpdateStagingSummary
+                        Invoke-UpdateStagingSummary
                     })
                     [void]$wrapBatchColToggles.Children.Add($chkCol)
                 }
@@ -8061,9 +8423,11 @@ function Show-MasterUpdater {
                         OldValue          = $oldVal
                         NewValue          = $newVal
                         SelectedForUpdate = $true
+                        OriginalNewValue  = $newVal
+                        CustomEdited      = $false
                     })
                 }
-                if (-not $sel.SelectedCells) { $sel.SelectedCells = @{} }; $sel.SelectedCells[$targetCol] = $true
+                Set-ItemCellSelected $sel $targetCol $true
 
                 if ($rec.Status -eq 'Unchanged') {
                     $rec.Status = 'Changed'
@@ -8078,6 +8442,7 @@ function Show-MasterUpdater {
 
                 & $RenderDetailPane $sel
                 & $RenderFullBaseRow $sel
+                Invoke-UpdateStagingSummary
             }
             $editWin.Close()
         })
@@ -8264,7 +8629,7 @@ function Show-MasterUpdater {
         }
 
         # 5. Mapping rules check
-        if ($script:MappingRules.Count -eq 0) {
+        if (@($script:MappingRules).Count -eq 0) {
             $msg = Get-UiString 'ErrDefineRules'
             $txtStatusMsg.Text = $msg
             [System.Windows.Forms.MessageBox]::Show($msg, (Get-UiString 'WarningTitle'), [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
@@ -8294,7 +8659,7 @@ function Show-MasterUpdater {
             return
         }
 
-        if (-not $incRows -or $incRows.Count -eq 0) {
+        if (-not $incRows -or @($incRows).Count -eq 0) {
             $msg = Get-UiString 'ErrNoDataRows'
             $txtStatusMsg.Text = $msg
             [System.Windows.Forms.MessageBox]::Show($msg, (Get-UiString 'WarningTitle'), [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
@@ -8323,8 +8688,12 @@ function Show-MasterUpdater {
     if ($mainTabs) {
         $mainTabs.add_SelectionChanged({
             param($s, $e)
-            if ($e.Source -eq $mainTabs -and $mainTabs.SelectedItem -eq $tabMapping) {
-                & $script:UpdateDataMappingPreview
+            if ($e.Source -ne $s) { return }
+            $tabMap = if ($script:tabMapping) { $script:tabMapping } elseif ($script:ActiveWindow) { $script:ActiveWindow.FindName('tabMapping') } elseif ($s.Items.Count -gt 0) { $s.Items[0] } else { $null }
+            if ($tabMap -and $s.SelectedItem -eq $tabMap) {
+                if ($script:UpdateDataMappingPreview -is [System.Management.Automation.ScriptBlock]) {
+                    & $script:UpdateDataMappingPreview
+                }
             }
         })
     }
@@ -8350,7 +8719,7 @@ function Show-MasterUpdater {
             $rec = $item.Record
             if ($rec.Changes) {
                 foreach ($chg in $rec.Changes) {
-                    $chg.SelectedForUpdate = if ($item.SelectedCells) { ($item.SelectedCells[$chg.BaseColumn] -ne $false) } else { $true }
+                    $chg.SelectedForUpdate = Get-ItemCellSelected $item $chg.BaseColumn
                 }
             }
             $accRecords.Add($rec)
@@ -8435,7 +8804,7 @@ function Show-MasterUpdater {
                 $rec = $item.Record
                 if ($rec.Changes) {
                     foreach ($chg in $rec.Changes) {
-                        $chg.SelectedForUpdate = if ($item.SelectedCells) { ($item.SelectedCells[$chg.BaseColumn] -ne $false) } else { $true }
+                        $chg.SelectedForUpdate = Get-ItemCellSelected $item $chg.BaseColumn
                     }
                 }
                 $accRecords.Add($rec)
@@ -8990,6 +9359,17 @@ function Show-MasterUpdater {
         $sv3.Content = $sp3
         $ti3.Content = $sv3
         [void]$tc.Items.Add($ti3)
+
+        # Tab 4: Settings & Metadata
+        $ti4 = New-Object System.Windows.Controls.TabItem -Property @{ Header = Get-UiString 'HelpTabSettingsMetadata' }
+        $sv4 = New-Object System.Windows.Controls.ScrollViewer -Property @{ VerticalScrollBarVisibility = 'Auto'; Margin = New-Object System.Windows.Thickness(16) }
+        $sp4 = New-Object System.Windows.Controls.StackPanel
+
+        $t4c1 = & $MakeCard (Get-UiString 'HelpMetadataCard1Title') (Get-UiString 'HelpMetadataCard1Body')
+        [void]$sp4.Children.Add($t4c1)
+        $sv4.Content = $sp4
+        $ti4.Content = $sv4
+        [void]$tc.Items.Add($ti4)
 
         [System.Windows.Controls.Grid]::SetRow($tc, 1)
         [void]$grid.Children.Add($tc)

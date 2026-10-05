@@ -323,7 +323,10 @@
         "StagingSummaryFormat": "Staged for write-back: {0} changes across {1} rows ({2} skipped)",
         "BtnApplyToNewFile": "💾 Save as New File...",
         "TooltipBtnApplyToNewFile": "Save all accepted and edited changes to a brand new Excel or CSV file, keeping original base file untouched",
-        "MsgWriteNewFileSuccess": "Successfully created new updated file:\n{0}\n\n• Updated cells: {1}\n• Added rows: {2}\n\nOriginal base file remained completely untouched.\nAudit log: {3}"
+        "MsgWriteNewFileSuccess": "Successfully created new updated file:\n{0}\n\n• Updated cells: {1}\n• Added rows: {2}\n\nOriginal base file remained completely untouched.\nAudit log: {3}",
+        "HelpTabSettingsMetadata": "4. Settings & Metadata",
+        "HelpMetadataCard1Title": "Metadata Tokens",
+        "HelpMetadataCard1Body": "You can map columns to inject dynamic metadata:\n• ChangeDate: Timestamp (e.g. yyyy-MM-dd HH:mm)\n• SourceFileFullPath: Path to incoming file\n• SourceFileName: Name of incoming file\n• CurrentUser: Windows user who ran the tool\n• SourceRowNumber: Origin row in incoming file\n• ImportBatchId: Unique Session GUID"
       }
     },
     "pl": {
@@ -648,7 +651,10 @@
         "StagingSummaryFormat": "Wybrano do zapisu: {0} zmian w {1} wierszach (pominięto: {2})",
         "BtnApplyToNewFile": "💾 Zapisz do nowego pliku...",
         "TooltipBtnApplyToNewFile": "Zapisz wszystkie zaakceptowane i zmodyfikowane zmiany do nowego pliku Excel lub CSV, pozostawiając oryginalny plik bazy bez zmian",
-        "MsgWriteNewFileSuccess": "Pomyślnie utworzono nowy zaktualizowany plik:\n{0}\n\n• Zaktualizowane komórki: {1}\n• Dodane wiersze: {2}\n\nOryginalny plik bazy pozostał nienaruszony.\nDziennik operacji: {3}"
+        "MsgWriteNewFileSuccess": "Pomyślnie utworzono nowy zaktualizowany plik:\n{0}\n\n• Zaktualizowane komórki: {1}\n• Dodane wiersze: {2}\n\nOryginalny plik bazy pozostał nienaruszony.\nDziennik operacji: {3}",
+        "HelpTabSettingsMetadata": "4. Ustawienia i Metadane",
+        "HelpMetadataCard1Title": "Tokeny Metadanych",
+        "HelpMetadataCard1Body": "Możesz mapować kolumny do wstrzykiwania metadanych:\n• ChangeDate: Znacznik czasu (np. yyyy-MM-dd HH:mm)\n• SourceFileFullPath: Ścieżka pliku zmian\n• SourceFileName: Nazwa pliku zmian\n• CurrentUser: Użytkownik Windows\n• SourceRowNumber: Wiersz w pliku źródłowym\n• ImportBatchId: Unikalne GUID sesji "
       }
     },
     "de": {
@@ -973,7 +979,10 @@
         "StagingSummaryFormat": "Für Rückschreiben vorgemerkt: {0} Änderungen in {1} Zeilen ({2} übersprungen)",
         "BtnApplyToNewFile": "💾 Als neue Datei speichern...",
         "TooltipBtnApplyToNewFile": "Alle akzeptierten und bearbeiteten Änderungen in einer neuen Excel- oder CSV-Datei speichern, ohne die Originaldatei zu verändern",
-        "MsgWriteNewFileSuccess": "Neue aktualisierte Datei erfolgreich erstellt:\n{0}\n\n• Aktualisierte Zellen: {1}\n• Hinzugefügte Zeilen: {2}\n\nDie ursprüngliche Basisdatei blieb völlig unverändert.\nÜberwachungsprotokoll: {3}"
+        "MsgWriteNewFileSuccess": "Neue aktualisierte Datei erfolgreich erstellt:\n{0}\n\n• Aktualisierte Zellen: {1}\n• Hinzugefügte Zeilen: {2}\n\nDie ursprüngliche Basisdatei blieb völlig unverändert.\nÜberwachungsprotokoll: {3}",
+        "HelpTabSettingsMetadata": "4. Einstellungen & Metadaten",
+        "HelpMetadataCard1Title": "Metadaten-Token",
+        "HelpMetadataCard1Body": "Sie können Spalten zuordnen, um Metadaten einzufügen:\n• ChangeDate: Zeitstempel (z.B. yyyy-MM-dd HH:mm)\n• SourceFileFullPath: Pfad zur eingehenden Datei\n• SourceFileName: Dateiname\n• CurrentUser: Windows-Benutzer\n• SourceRowNumber: Quellzeile\n• ImportBatchId: Eindeutige Sitzungs-ID"
       }
     }
   }
