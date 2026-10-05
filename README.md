@@ -16,7 +16,7 @@ Built as an architectural sibling of `Compare-ExcelFiles.ps1`, it introduces row
    - **Reactive Live Preview & Join Key Indicator**: Instant sample re-projection when changing join keys, with key icon (**`🔑 `**) in the Target Base Column.
 2. **Review & Approval Engine (Row-by-Row)**:
    - Categorizes incoming rows into `New`, `Changed`, `Unchanged`, `Ambiguous`, and `Removed`.
-   - Side-by-side / stacked diff inspector with per-cell modified highlights.
+   - Side-by-side / stacked diff inspector with per-cell modified highlights and resizable horizontal column widths (via GridSplitter), using modern flat scrollbars.
    - Selective cell updates: users can deselect specific cells they do not wish to update.
    - **Double-Click Quick Edit**: Double-clicking any record in the review items list directly opens the field override dialog.
    - Ambiguous resolution for duplicate keys, missing keys, or multi-row candidates.
@@ -61,7 +61,7 @@ Built as an architectural sibling of `Compare-ExcelFiles.ps1`, it introduces row
    - Fully compatible with Windows PowerShell 5.1 (.NET Framework) and PowerShell 7+ (.NET Core).
    - Compilable to standalone windowed EXE via `ps2exe` with embedded language catalog and icon.
 9. **Trilingual Dynamic Localization**:
-   - 283 localization keys maintained across Polish (`pl`), English (`en`), and German (`de`) with 100% key parity.
+   - 323 localization keys maintained across Polish (`pl`), English (`en`), and German (`de`) with 100% key parity.
    - Dynamic real-time language switching without application restart.
 
 ---
@@ -85,7 +85,7 @@ ExcelMasterUpdater/
 ├── Watch-IncomingFolder.ps1        # Folder-watch daemon & auto-import runner
 ├── Master-Updater.exe              # Standalone compiled executable (PS2EXE)
 ├── Build-Exe.ps1                   # Standalone PS2EXE build script
-├── language.json                   # Trilingual localization catalog (283 keys: PL / EN / DE)
+├── language.json                   # Trilingual localization catalog (323 keys: PL / EN / DE)
 ├── README.md                       # Main architecture & user manual
 ├── Docs/                           # Comprehensive documentation
 │   ├── USER_GUIDE.md               # Trilingual unified user guide (EN / PL / DE)
@@ -112,7 +112,7 @@ ExcelMasterUpdater/
     ├── Test-EditExcelHelper.ps1            # InPlace XML patching & row appending
     ├── Test-GridSplitterBehavior.ps1       # UI splitter layout and persistence
     ├── Test-HeadlessAndWatcher.ps1         # Headless batch, HTML reporting, and folder watcher
-    ├── Test-Localization.ps1               # 100% key completeness across PL / EN / DE (320 keys)
+    ├── Test-Localization.ps1               # 100% key completeness across PL / EN / DE (323 keys)
     ├── Test-NegativePath.ps1               # Fuzz & negative-path tests (corrupt ZIP, locks)
     ├── Test-NewUXAndResilienceFeatures.ps1 # Tab 1 search, double-click, CSV pipe & Win-1250
     ├── Test-QoLSelectiveReconciliation.ps1 # Diff policies, selective field takeover, inline editing & revert

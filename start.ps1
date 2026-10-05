@@ -113,24 +113,30 @@ if ($UseExe -and (Test-Path $exeFile)) {
     return
 }
 
-# STA Apartment check for Windows PowerShell 5.1
-if ([System.Threading.Thread]::CurrentThread.GetApartmentState() -ne [System.Threading.ApartmentState]::STA) {
-    if ($PSVersionTable.PSVersion.Major -le 5) {
-        Write-Host "Re-launching in STA apartment mode for WPF..." -ForegroundColor Yellow
-        $argList = @("-NoProfile", "-STA", "-File", $MyInvocation.MyCommand.Path)
-        if ($BaseFilePath)     { $argList += @("-BaseFilePath", $BaseFilePath) }
-        if ($IncomingPath)     { $argList += @("-IncomingPath", $IncomingPath) }
-        if ($BaseSheet)        { $argList += @("-BaseSheet", $BaseSheet) }
-        if ($IncomingSheet)    { $argList += @("-IncomingSheet", $IncomingSheet) }
-        if ($ConfigPath)       { $argList += @("-ConfigPath", $ConfigPath) }
-        if ($NonInteractive)   { $argList += "-NonInteractive" }
-        if ($Headless)         { $argList += "-Headless" }
-        if ($AutoAccept)       { $argList += @("-AutoAccept", $AutoAccept) }
-        if ($ExportReportPath) { $argList += @("-ExportReportPath", $ExportReportPath) }
-        if ($Quiet)            { $argList += "-Quiet" }
-        & powershell.exe @argList
-        return
-    }
+# STA Apartment check and clean AppDomain isolation
+$alreadyLoaded = $false
+try {
+    $alreadyLoaded = [bool](([System.Management.Automation.PSTypeName]'EditExcelHelper').Type)
+} catch {
+    $alreadyLoaded = $false
+}
+
+$needsRelaunch = ($alreadyLoaded -or [System.Threading.Thread]::CurrentThread.GetApartmentState() -ne [System.Threading.ApartmentState]::STA)
+if ($needsRelaunch -and -not $NonInteractive) {
+    $psExe = if ($PSVersionTable.PSVersion.Major -ge 6) { "pwsh.exe" } else { "powershell.exe" }
+    Write-Host "Launching in clean STA session to ensure latest assembly bindings..." -ForegroundColor Cyan
+    $argList = @("-NoProfile", "-STA", "-File", $MyInvocation.MyCommand.Path)
+    if ($BaseFilePath)     { $argList += @("-BaseFilePath", $BaseFilePath) }
+    if ($IncomingPath)     { $argList += @("-IncomingPath", $IncomingPath) }
+    if ($BaseSheet)        { $argList += @("-BaseSheet", $BaseSheet) }
+    if ($IncomingSheet)    { $argList += @("-IncomingSheet", $IncomingSheet) }
+    if ($ConfigPath)       { $argList += @("-ConfigPath", $ConfigPath) }
+    if ($Headless)         { $argList += "-Headless" }
+    if ($AutoAccept)       { $argList += @("-AutoAccept", $AutoAccept) }
+    if ($ExportReportPath) { $argList += @("-ExportReportPath", $ExportReportPath) }
+    if ($Quiet)            { $argList += "-Quiet" }
+    & $psExe @argList
+    return
 }
 
 $scriptFile = Join-Path $PSScriptRoot "Master-Updater.ps1"

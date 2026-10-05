@@ -49,7 +49,7 @@ Excel Master Updater provides:
 ├── Master-Updater.exe        # Compiled standalone binary (PS2EXE, 771 KB)
 ├── start.ps1                 # Universal launcher (dual PS5.1/PS7 engine & parameter forwarder)
 ├── Build-Exe.ps1             # Automated compilation script utilizing PS2EXE
-├── language.json             # Trilingual catalog (EN, PL, DE — 320 keys per language)
+├── language.json             # Trilingual catalog (EN, PL, DE — 323 keys per language)
 ├── config.json               # Application runtime preferences & persistence
 ├── PROJECT_MEMORY.md         # This technical specification and memory file
 ├── Docs\                     # Documentation suite
@@ -93,9 +93,10 @@ Compiles low-overhead C# helper classes directly into the runtime memory via `Ad
 - **`FastExcelHelper`**: Reads `.xlsx` worksheets by streaming XML nodes (`XmlReader`) from `xl/worksheets/sheetN.xml` and unzipping `xl/sharedStrings.xml`. Implements fast CSV parsing with RFC-4180 quote escaping. Exports datasets to clean `.xlsx` packages without COM dependencies.
 - **`FastDiffHelper`**: High-performance string normalization engine. Provides methods for whitespace collapsing, diacritic/special character stripping, and exact case-sensitive/case-insensitive comparisons.
 - **`EditExcelHelper`**: High-speed, zero-dependency OpenXML patcher. Operates directly on the `.xlsx` ZIP container:
-  - Updates cell contents using inline strings (`<c r="C5" t="inlineStr"><is><t>val</t></is></c>`), completely avoiding shared string table recalculations.
-  - Appends new rows sequentially into `<sheetData>` and updates worksheet `<dimension>` bounds.
-  - Detects and rejects dangerous workbook structures (e.g. `<tableParts>`, shared formulas `<f t="shared">`, pivot tables) to guarantee data safety.
+  - Updates cell contents using inline strings (`<c r="C5" t="inlineStr"><is><t>val</t></is></c>`), preserving cell style attributes (`s`), colors, fonts, and borders.
+  - Appends new rows sequentially into `<sheetData>`, inherits column style attributes (`s`) from previous rows, and updates worksheet `<dimension>` bounds.
+  - Automatically discovers and expands Excel Table boundaries (`ref` and `autoFilter.ref` in `xl/tables/table*.xml`) to encompass newly appended rows, preserving table styles, alternating row stripes, and filters.
+  - Guaranteed 100% InPlace patching without destructive fallback to `SafeRewrite` for `.xlsx` files.
 
 ### Region 2: Configuration Management
 - Manages application settings stored in `config.json` (or `%APPDATA%\MasterUpdater\config.json`).
@@ -251,9 +252,9 @@ The application enforces a strict **Zero-Hardcoded-Strings** policy. Every UI el
 {
   "DefaultLanguage": "pl",
   "Languages": {
-    "en": { "DisplayName": "English", "Strings": { ... 261 keys ... } },
-    "pl": { "DisplayName": "Polski",  "Strings": { ... 261 keys ... } },
-    "de": { "DisplayName": "Deutsch", "Strings": { ... 261 keys ... } }
+    "en": { "DisplayName": "English", "Strings": { ... 323 keys ... } },
+    "pl": { "DisplayName": "Polski",  "Strings": { ... 323 keys ... } },
+    "de": { "DisplayName": "Deutsch", "Strings": { ... 323 keys ... } }
   }
 }
 ```
@@ -292,8 +293,8 @@ The application enforces a strict **Zero-Hardcoded-Strings** policy. Every UI el
 The test suite provides comprehensive coverage across the entire engine and GUI layer:
 
 1. **`Test-Localization.ps1`**:
-   - Asserts 100% trilingual key completeness across `en`, `pl`, and `de` (281 keys each).
-   - Validates that all 371 `Get-UiString` invocations in `Master-Updater.ps1` map to valid catalog keys.
+   - Asserts 100% trilingual key completeness across `en`, `pl`, and `de` (323 keys each).
+   - Validates that all `Get-UiString` invocations in `Master-Updater.ps1` map to valid catalog keys.
 2. **`Test-DataMappingPreview.ps1`**:
    - Validates all 22 Data & Mapping Live Preview UI controls in the WPF element tree.
    - Tests sample row extraction from Base and Incoming files, DataGrid binding, and live projection calculation via `Get-ProjectedRow`.
@@ -433,4 +434,26 @@ The test suite provides comprehensive coverage across the entire engine and GUI 
   1. Maintain a dedicated 4th tab (`HelpTabMergeModes`) in `ShowHelpDialog` (F1) explaining Merge Modes, 4 Comparison Options, and Smart Auto-Mapping heuristics across English, Polish, and German.
   2. In `Invoke-AutoMapRules`, implement `Find-SmartHeaderMatch` using punctuation stripping and fuzzy word-stem matching (>= 50% overlap) to automatically link misspelled or abbreviated ERP headers.
   3. In `Invoke-AutoMapRules`, detect when Base has separate Address and City columns while Incoming has a single combined Address; automatically generate a `Concatenate` rule with `, ` separator.
-  4. Ensure 100% key and text parity in `language.json` (307 keys) and all standalone guides (`USER_GUIDE_PL.md`, `USER_GUIDE_EN.md`, `USER_GUIDE_DE.md`, `USER_GUIDE.md`) with UTF-8 BOM encoding.
+  4. Ensure 100% key and text parity in `language.json` (323 keys) and all standalone guides (`USER_GUIDE_PL.md`, `USER_GUIDE_EN.md`, `USER_GUIDE_DE.md`, `USER_GUIDE.md`) with UTF-8 BOM encoding.
+
+### 16. UI Modernization, Metadata Settings, and Resizing Grids
+- **Gotcha**:
+  1. Traditional Windows scrollbars look archaic in modern Dark/Light theme applications, clashing with the custom WPF palette.
+  2. Fixed column widths in the Review Details pane limit readability when inspecting rows with numerous mapped columns or long text blocks.
+  3. Stamping dynamic tracking metadata (e.g., `ChangeDate`, `SourceFileName`) requires specific configuration to map the runtime tokens into physical base columns.
+- **Rule**:
+  1. Inject modern, flat XAML `ScrollBar` and `Thumb` templates directly into `Window.Resources`, bound to the active theme palette (`BgCardHover`, `BorderCard`).
+  2. Implement a vertical `GridSplitter` inside the Review Item details pane (between properties list and cell diff grid) allowing dynamic horizontal resizing. Enable `TextWrapping="Wrap"` inside `DataGrid` cells.
+  3. Expose a dedicated **Metadata Columns (Kolumny metadanych)** tab in the Settings modal to allow users to bind `ModelName`, `ChangeDate`, `SourceFileFullPath`, `SourceFileName`, `CurrentUser`, `SourceRowNumber`, and `ImportBatchId` without cluttering the primary mapping dialog.
+  4. Document Metadata Tokens in a dedicated in-app Help Dialog tab (`HelpTabSettingsMetadata`).
+
+### 17. InPlace OpenXML Style, Table & Color Preservation vs Destructive SafeRewrite
+- **Gotcha**:
+  1. **Destructive SafeRewrite Fallback**: Previously, when an InPlace guard warning was raised (e.g. for `tableParts` or shared formulas), `Invoke-MasterWriteBack` automatically fell back to `SafeRewrite`. `SafeRewrite` called `[FastExcelHelper]::ExportToExcel`, which generated a plain OpenXML workbook from scratch, permanently destroying 100% of cell colors, font formatting, borders, conditional formatting rules, Excel tables, and formulas.
+  2. **PowerShell AppDomain Assembly Locking**: In PowerShell, types compiled via `Add-Type` (such as `EditExcelHelper`) cannot be modified or re-compiled within the same running process. Dot-sourcing `. .\start.ps1` in an active session retained the old cached C# type with legacy guard warnings.
+  3. **Table Range Desynchronization on Append**: Appending new rows directly into `<sheetData>` without expanding `xl/tables/table*.xml` left appended records outside the table boundary, losing table styles (such as zebra stripes) and auto-filter integration. Furthermore, newly appended cells lacked `s` (style) attributes.
+- **Rule**:
+  1. **Strict InPlace Guarantee for Excel Workbooks**: `.xlsx` files must **ALWAYS** use `InPlace` OpenXML patching (`EditExcelHelper.WriteChanges`), never falling back to `SafeRewrite` or `ExportToExcel`. `SafeRewrite` is strictly restricted to plain `.csv` files.
+  2. **Automatic Excel Table Expansion**: `EditExcelHelper.WriteChanges` scans for any `xl/tables/table*.xml` packages, expanding `ref` and `autoFilter.ref` (e.g., `A1:AL493` -> `A1:AL494`) when rows are appended so new records seamlessly inherit table zebra striping and column filters.
+  3. **Style Inheritance for Appended Cells**: When appending new rows, cells copy the style attribute `s` from the corresponding column of the preceding data row.
+  4. **Clean Session Relaunch in `start.ps1`**: `start.ps1` checks if `EditExcelHelper` is already loaded in the process and automatically relaunches in a clean `-NoProfile -STA` process to prevent stale in-memory assembly conflicts.

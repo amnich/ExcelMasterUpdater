@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Excel Master Updater - Master file child records synchronization and update tool.
 
@@ -823,6 +823,7 @@ public static class EditExcelHelper {
 
         string targetSheetPath = null;
         XDocument doc = null;
+        var tableDocs = new Dictionary<string, XDocument>(StringComparer.OrdinalIgnoreCase);
 
         try {
             using (var inStream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read))
@@ -871,22 +872,41 @@ public static class EditExcelHelper {
                     doc = XDocument.Load(sheetStream);
                 }
 
-                // GUARD: Scan for tableParts, pivotTable, and shared formulas without full ToString() memory overhead
-                // P5: Returns a warning string instead of throwing so callers can fall back to SafeRewrite
-                bool hasUnsupported = doc.Descendants().Any(e =>
-                    e.Name.LocalName.Equals("tableParts", StringComparison.OrdinalIgnoreCase) ||
-                    e.Name.LocalName.Equals("tablePart", StringComparison.OrdinalIgnoreCase) ||
-                    e.Name.LocalName.Equals("pivotTable", StringComparison.OrdinalIgnoreCase) ||
-                    (e.Name.LocalName == "f" && string.Equals((string)e.Attribute("t"), "shared", StringComparison.OrdinalIgnoreCase))
-                );
-                if (hasUnsupported) {
-                    throw new InvalidOperationException("INPLACE_GUARD_WARN: Unsupported structure detected (tableParts, pivotTable, or shared formulas). Falling back to SafeRewrite mode.");
+                // Load all table XML files in the workbook to allow range expansion on row append
+                foreach (var entry in zipIn.Entries) {
+                    if (entry.FullName.StartsWith("xl/tables/", StringComparison.OrdinalIgnoreCase) && entry.FullName.EndsWith(".xml", StringComparison.OrdinalIgnoreCase)) {
+                        using (var ts = entry.Open()) {
+                            tableDocs[entry.FullName] = XDocument.Load(ts);
+                        }
+                    }
                 }
 
                 var sheetData = doc.Root.Element(ns + "sheetData");
                 if (sheetData == null) throw new InvalidOperationException("sheetData element not found in worksheet");
 
+                // Cache column styles from the last existing row so appended rows inherit identical borders, font, and fill
+                var colStyles = new Dictionary<int, string>();
+                var lastExistingRow = sheetData.Elements(ns + "row").LastOrDefault();
+                if (lastExistingRow != null) {
+                    foreach (var c in lastExistingRow.Elements(ns + "c")) {
+                        string rAttr = (string)c.Attribute("r");
+                        int cIdx = CellRefToColIndex(rAttr, -1);
+                        string sAttr = (string)c.Attribute("s");
+                        if (cIdx >= 0 && !string.IsNullOrEmpty(sAttr)) {
+                            colStyles[cIdx] = sAttr;
+                        }
+                    }
+                }
+
+                int maxRow = 1;
+                foreach (var r in sheetData.Elements(ns + "row")) {
+                    int rNum = (int?)r.Attribute("r") ?? 0;
+                    if (rNum > maxRow) maxRow = rNum;
+                }
+
                 foreach (var op in ops) {
+                    if (op.RowNumber > maxRow) maxRow = op.RowNumber;
+
                     if (op.Type == "PatchCell") {
                         var rowElem = sheetData.Elements(ns + "row").FirstOrDefault(r => (int?)r.Attribute("r") == op.RowNumber);
                         if (rowElem == null) {
@@ -917,12 +937,16 @@ public static class EditExcelHelper {
                             } else {
                                 var newC = new XElement(ns + "c",
                                     new XAttribute("r", cellRef),
-                                    new XAttribute("t", "inlineStr"),
-                                    new XElement(ns + "is", new XElement(ns + "t", cellVal))
+                                    new XAttribute("t", "inlineStr")
                                 );
-                                if (cellVal.Length > 0 && (char.IsWhiteSpace(cellVal[0]) || char.IsWhiteSpace(cellVal[cellVal.Length - 1]))) {
-                                    newC.Element(ns + "is").Element(ns + "t").SetAttributeValue(XNamespace.Xml + "space", "preserve");
+                                if (colStyles.ContainsKey(colIdx)) {
+                                    newC.SetAttributeValue("s", colStyles[colIdx]);
                                 }
+                                var isElem = new XElement(ns + "is", new XElement(ns + "t", cellVal));
+                                if (cellVal.Length > 0 && (char.IsWhiteSpace(cellVal[0]) || char.IsWhiteSpace(cellVal[cellVal.Length - 1]))) {
+                                    isElem.Element(ns + "t").SetAttributeValue(XNamespace.Xml + "space", "preserve");
+                                }
+                                newC.Add(isElem);
 
                                 var nextCell = rowElem.Elements(ns + "c").FirstOrDefault(c => {
                                     int cCol = CellRefToColIndex((string)c.Attribute("r"), -1);
@@ -943,12 +967,16 @@ public static class EditExcelHelper {
 
                             var newC = new XElement(ns + "c",
                                 new XAttribute("r", cellRef),
-                                new XAttribute("t", "inlineStr"),
-                                new XElement(ns + "is", new XElement(ns + "t", cellVal))
+                                new XAttribute("t", "inlineStr")
                             );
-                            if (cellVal.Length > 0 && (char.IsWhiteSpace(cellVal[0]) || char.IsWhiteSpace(cellVal[cellVal.Length - 1]))) {
-                                newC.Element(ns + "is").Element(ns + "t").SetAttributeValue(XNamespace.Xml + "space", "preserve");
+                            if (colStyles.ContainsKey(colIdx)) {
+                                newC.SetAttributeValue("s", colStyles[colIdx]);
                             }
+                            var isElem = new XElement(ns + "is", new XElement(ns + "t", cellVal));
+                            if (cellVal.Length > 0 && (char.IsWhiteSpace(cellVal[0]) || char.IsWhiteSpace(cellVal[cellVal.Length - 1]))) {
+                                    isElem.Element(ns + "t").SetAttributeValue(XNamespace.Xml + "space", "preserve");
+                            }
+                            newC.Add(isElem);
                             rowElem.Add(newC);
                         }
                         sheetData.Add(rowElem);
@@ -958,26 +986,50 @@ public static class EditExcelHelper {
                 // Update dimension using fast incremental bounds without scanning all cells
                 var dimElem = doc.Root.Element(ns + "dimension");
                 if (dimElem != null) {
-                    int maxRow = 1;
                     int maxCol = 0;
                     string existingRef = (string)dimElem.Attribute("ref");
                     if (!string.IsNullOrEmpty(existingRef)) {
                         int colonIdx = existingRef.IndexOf(':');
                         string endRef = (colonIdx >= 0) ? existingRef.Substring(colonIdx + 1) : existingRef;
                         maxCol = CellRefToColIndex(endRef, 0);
-                        int rStart = 0;
-                        while (rStart < endRef.Length && char.IsLetter(endRef[rStart])) rStart++;
-                        int parsedR;
-                        if (int.TryParse(endRef.Substring(rStart), out parsedR)) maxRow = parsedR;
                     }
                     foreach (var op in ops) {
-                        if (op.RowNumber > maxRow) maxRow = op.RowNumber;
                         foreach (var kvp in op.Cells) {
                             if (kvp.Key > maxCol) maxCol = kvp.Key;
                         }
                     }
                     string dimRef = "A1:" + ColIndexToName(maxCol) + maxRow;
                     dimElem.SetAttributeValue("ref", dimRef);
+                }
+
+                // Expand Excel Table boundaries (ref and autoFilter) to include appended rows
+                foreach (var kvp in tableDocs) {
+                    var tableDoc = kvp.Value;
+                    var tblElem = tableDoc.Root;
+                    if (tblElem != null && tblElem.Name.LocalName == "table") {
+                        string oldRef = (string)tblElem.Attribute("ref");
+                        if (!string.IsNullOrEmpty(oldRef)) {
+                            int colon = oldRef.IndexOf(':');
+                            if (colon > 0) {
+                                string startRef = oldRef.Substring(0, colon);
+                                string endRef = oldRef.Substring(colon + 1);
+                                int rStart = 0;
+                                while (rStart < endRef.Length && char.IsLetter(endRef[rStart])) rStart++;
+                                string endCol = endRef.Substring(0, rStart);
+                                int tblEndRow;
+                                if (int.TryParse(endRef.Substring(rStart), out tblEndRow)) {
+                                    if (maxRow > tblEndRow) {
+                                        string newTblRef = startRef + ":" + endCol + maxRow;
+                                        tblElem.SetAttributeValue("ref", newTblRef);
+                                        var autoFilter = tblElem.Element(tblElem.Name.Namespace + "autoFilter");
+                                        if (autoFilter != null) {
+                                            autoFilter.SetAttributeValue("ref", newTblRef);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
 
                 // Stream copy to temp archive
@@ -993,6 +1045,16 @@ public static class EditExcelHelper {
                                 Indent = false
                             })) {
                                 doc.Save(xw);
+                            }
+                        } else if (tableDocs.ContainsKey(entry.FullName)) {
+                            var newTblEntry = zipOut.CreateEntry(entry.FullName, CompressionLevel.Optimal);
+                            using (var tsStream = newTblEntry.Open())
+                            using (var xw = XmlWriter.Create(tsStream, new XmlWriterSettings {
+                                Encoding = new UTF8Encoding(false),
+                                OmitXmlDeclaration = false,
+                                Indent = false
+                            })) {
+                                tableDocs[entry.FullName].Save(xw);
                             }
                         } else {
                             var copyEntry = zipOut.CreateEntry(entry.FullName, CompressionLevel.Optimal);
@@ -2441,7 +2503,7 @@ function Invoke-MasterWriteBack {
     }
 
     $isCsv = $BaseFilePath -match '\.csv$'
-    $writeMode = if ($isCsv) { 'SafeRewrite' } elseif ($AppConfig -and $AppConfig.WriteMode) { $AppConfig.WriteMode } else { 'InPlace' }
+    $writeMode = if ($isCsv) { 'SafeRewrite' } else { 'InPlace' }
 
     $acceptedItems = [System.Collections.Generic.List[object]]::new()
     foreach ($it in $ReviewItems) {
@@ -2567,29 +2629,16 @@ function Invoke-MasterWriteBack {
             }
         }
 
-        # Execute InPlace write
-        # P5: Catch the INPLACE_GUARD_WARN signal and fall back to SafeRewrite automatically
-        try {
-            [EditExcelHelper]::WriteChanges($BaseFilePath, $BaseSheet, $ops)
-        } catch [System.InvalidOperationException] {
-            if ($_.Exception.Message -like 'INPLACE_GUARD_WARN:*') {
-                # Fall back to SafeRewrite
-                $writeMode = 'SafeRewrite'
-                Write-Warning "InPlace guard triggered. Falling back to SafeRewrite mode: $($_.Exception.Message)"
-            } else {
-                throw
-            }
-        }
+        # Execute InPlace write directly into OpenXML ZIP package (preserves styles, formulas, and tables)
+        [EditExcelHelper]::WriteChanges($BaseFilePath, $BaseSheet, $ops)
 
-        if ($writeMode -ne 'SafeRewrite') {
-            return @{
-                Success          = $true
-                BackupPath       = $backupPath
-                UpdatedCells     = $updatedCellsCount
-                AddedRows        = $addedRowsCount
-                BatchId          = $BatchId
-                BackupSizeWarning = $backupSizeWarning
-            }
+        return @{
+            Success           = $true
+            BackupPath        = $backupPath
+            UpdatedCells      = $updatedCellsCount
+            AddedRows         = $addedRowsCount
+            BatchId           = $BatchId
+            BackupSizeWarning = $backupSizeWarning
         }
         # SafeRewrite Mode (or CSV)
         $baseRaw = [FastExcelHelper]::ReadSheet($BaseFilePath, $BaseSheet)
@@ -4957,6 +5006,31 @@ function Show-MasterUpdater {
                             </ListBox>
                         </Border>
 
+                        <!-- Vertical Splitter -->
+                        <GridSplitter x:Name="splitReview" Grid.Column="1" Width="10" HorizontalAlignment="Center" VerticalAlignment="Stretch"
+                                      Background="Transparent" Cursor="SizeWE" ResizeDirection="Columns" ResizeBehavior="PreviousAndNext">
+                            <GridSplitter.Template>
+                                <ControlTemplate TargetType="GridSplitter">
+                                    <Border Background="Transparent" VerticalAlignment="Stretch" HorizontalAlignment="Stretch" Padding="4,0">
+                                        <Grid HorizontalAlignment="Center">
+                                            <Rectangle x:Name="splitLineV" Width="1" Fill="{DynamicResource BorderCard}" VerticalAlignment="Stretch"/>
+                                            <Border x:Name="splitPillV" Width="4" Height="48" Background="{DynamicResource BorderCard}" CornerRadius="2" VerticalAlignment="Center"/>
+                                        </Grid>
+                                    </Border>
+                                    <ControlTemplate.Triggers>
+                                        <Trigger Property="IsMouseOver" Value="True">
+                                            <Setter TargetName="splitLineV" Property="Fill" Value="{DynamicResource AccentBlue}"/>
+                                            <Setter TargetName="splitPillV" Property="Background" Value="{DynamicResource AccentBlue}"/>
+                                        </Trigger>
+                                        <Trigger Property="IsDragging" Value="True">
+                                            <Setter TargetName="splitLineV" Property="Fill" Value="{DynamicResource AccentGreen}"/>
+                                            <Setter TargetName="splitPillV" Property="Background" Value="{DynamicResource AccentGreen}"/>
+                                        </Trigger>
+                                    </ControlTemplate.Triggers>
+                                </ControlTemplate>
+                            </GridSplitter.Template>
+                        </GridSplitter>
+
                         <!-- Right Detail Pane Card -->
                         <Border x:Name="detailBorder" Grid.Column="2" Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderCard}" BorderThickness="1" CornerRadius="8" Padding="18">
                             <ScrollViewer VerticalScrollBarVisibility="Auto">
@@ -5671,7 +5745,8 @@ function Show-MasterUpdater {
                     $r.DiffPolicyDisplay = Get-DiffPolicyDisplay $r.DiffPolicy
                 }
             }
-            if ($gridMappingRules) { $gridMappingRules.Items.Refresh() }
+            $gridMap = $w.FindName('gridMappingRules')
+            if ($gridMap) { $gridMap.Items.Refresh() }
         }
         & $UpdateStagingSummary
         & $setProp 'cmbFilterStatus' 'ToolTip' (Get-UiString 'TooltipFilterStatus')
@@ -8130,28 +8205,33 @@ function Show-MasterUpdater {
 
     # KPI Pill active selection updater
     $UpdateKpiPillSelection = {
-        $tag = if ($cmbFilterStatus.SelectedItem -is [System.Windows.Controls.ComboBoxItem]) {
-            $cmbFilterStatus.SelectedItem.Tag
-        } elseif ($cmbFilterStatus.SelectedItem) {
-            $cmbFilterStatus.SelectedItem.ToString()
+        $w = if ($window) { $window } elseif ($script:ActiveWindow) { $script:ActiveWindow } else { $null }
+        if (-not $w) { return }
+        $cmbFilterStatusDynamic = $w.FindName('cmbFilterStatus')
+        if (-not $cmbFilterStatusDynamic) { return }
+
+        $tag = if ($cmbFilterStatusDynamic.SelectedItem -is [System.Windows.Controls.ComboBoxItem]) {
+            $cmbFilterStatusDynamic.SelectedItem.Tag
+        } elseif ($cmbFilterStatusDynamic.SelectedItem) {
+            $cmbFilterStatusDynamic.SelectedItem.ToString()
         } else { 'All' }
 
         $pills = @(
-            @{ Pill = $kpiPillAll;       Tag = 'All' },
-            @{ Pill = $kpiPillNew;       Tag = 'New' },
-            @{ Pill = $kpiPillChanged;   Tag = 'Changed' },
-            @{ Pill = $kpiPillAmbiguous; Tag = 'Ambiguous' },
-            @{ Pill = $kpiPillAccepted;  Tag = 'Accepted' },
-            @{ Pill = $kpiPillSkipped;   Tag = 'Skipped' }
+            @{ Pill = $w.FindName('kpiPillAll');       Tag = 'All' },
+            @{ Pill = $w.FindName('kpiPillNew');       Tag = 'New' },
+            @{ Pill = $w.FindName('kpiPillChanged');   Tag = 'Changed' },
+            @{ Pill = $w.FindName('kpiPillAmbiguous'); Tag = 'Ambiguous' },
+            @{ Pill = $w.FindName('kpiPillAccepted');  Tag = 'Accepted' },
+            @{ Pill = $w.FindName('kpiPillSkipped');   Tag = 'Skipped' }
         )
 
         foreach ($p in $pills) {
             if ($p.Pill) {
                 if ($p.Tag -eq $tag) {
-                    $p.Pill.BorderBrush = $window.Resources['AccentBlue']
+                    $p.Pill.BorderBrush = $w.Resources['AccentBlue']
                     $p.Pill.BorderThickness = [System.Windows.Thickness]::new(2)
                 } else {
-                    $p.Pill.BorderBrush = $window.Resources['BorderCard']
+                    $p.Pill.BorderBrush = $w.Resources['BorderCard']
                     $p.Pill.BorderThickness = [System.Windows.Thickness]::new(1)
                 }
             }

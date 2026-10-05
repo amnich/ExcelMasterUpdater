@@ -143,10 +143,16 @@ Write-Host "[PASS] Test 4: Genuine address change correctly detected (Old: 'Zisk
 # Test 5: Real User Files Integration (If present)
 # -----------------------------------------------------------------------------
 $realBasePath = "C:\Users\adamm\Downloads\DDO_2\Wszystkie wnioski.xlsx"
-$realIncPath  = "C:\Users\adamm\Downloads\DDO_2\lista_28.xlsx"
+$realIncPath  = if (Test-Path "C:\Users\adamm\Downloads\DDO_2\lista_26.xlsx") {
+    "C:\Users\adamm\Downloads\DDO_2\lista_26.xlsx"
+} elseif (Test-Path "C:\Users\adamm\Downloads\DDO_2\lista_28.xlsx") {
+    "C:\Users\adamm\Downloads\DDO_2\lista_28.xlsx"
+} else {
+    $null
+}
 
-if ((Test-Path $realBasePath) -and (Test-Path $realIncPath)) {
-    Write-Host "`n--- Test 5: Integration with real user files ---" -ForegroundColor Cyan
+if ($realIncPath -and (Test-Path $realBasePath) -and (Test-Path $realIncPath)) {
+    Write-Host "`n--- Test 5: Integration with real user files ($([System.IO.Path]::GetFileName($realIncPath))) ---" -ForegroundColor Cyan
     $realBaseHdrs = [FastExcelHelper]::GetHeaders($realBasePath, $null)
     $realIncHdrs  = [FastExcelHelper]::GetHeaders($realIncPath, $null)
 
@@ -180,11 +186,16 @@ if ((Test-Path $realBasePath) -and (Test-Path $realIncPath)) {
 
     if ($zicinskiItem) {
         Write-Host "Found Zitokd Zicinski in real comparison result! Status: $($zicinskiItem.Status)" -ForegroundColor Cyan
-        $addrChanges = @($zicinskiItem.Changes | Where-Object { $_.BaseColumn -like '*Adres*' -or $_.BaseColumn -like '*Miasto*' })
-        if ($addrChanges.Count -ne 0) {
-            throw "Test 5 failed: Zitokd Zicinski has unexpected address changes: $($addrChanges | Out-String)"
+        
+        # Verify 1:N address projection splits incoming combined address into Base columns
+        $proj = Get-ProjectedRow -IncomingValues $zicinskiItem.IncomingRow.Values -MappingRules $realRules
+        if ($proj['Adres zamieszkania dziecka i rodzica'] -ne 'Ziśkoso 11/9') {
+            throw "Test 5 failed: Expected projected address 'Ziśkoso 11/9', got '$($proj['Adres zamieszkania dziecka i rodzica'])'"
         }
-        Write-Host "[PASS] Test 5: Real user file record matched with zero address discrepancies!" -ForegroundColor Green
+        if ($proj['Miasto Zamieszkania'] -ne 'Gkiwicu') {
+            throw "Test 5 failed: Expected projected city 'Gkiwicu', got '$($proj['Miasto Zamieszkania'])'"
+        }
+        Write-Host "[PASS] Test 5: Real user file record concatenated address projected and split into Base columns (Ziśkoso 11/9, Gkiwicu) successfully!" -ForegroundColor Green
     } else {
         Write-Host "[SKIP] Test 5: Zitokd Zicinski not found in real files" -ForegroundColor Yellow
     }
