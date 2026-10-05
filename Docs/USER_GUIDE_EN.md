@@ -127,7 +127,61 @@ For changed records, the detail pane presents every modified field in a side-by-
 
 ---
 
-## 4. Settings & Metadata Configuration
+## 4. Column Merge Modes & Comparison Options
+
+The application includes an advanced data transformation and normalization engine designed to reconcile structural differences across ERP exports, school registers, and HR spreadsheets.
+
+### Column Mapping Merge Modes
+
+Each mapping rule in the table operates in one of three configurable merge modes:
+
+1. **Exact (1:1)**:
+   - Direct 1-to-1 mapping from a single incoming column to a single base column.
+   - Triggers a change recommendation whenever the incoming value differs from the current base value.
+
+2. **FirstNonEmpty (N:1)**:
+   - Provides fallback coalescing across multiple candidate incoming columns.
+   - Enables selecting several source columns (e.g. `MobilePhone`, `HomePhone`, `WorkPhone`).
+   - The target base column is populated with the value from the first column that contains non-blank text.
+
+3. **Concatenate (N:1 and 1:N)**:
+   - **N:1 Joining (Multiple incoming columns into one base column)**:
+     - Joins multiple source fields (e.g. `StreetAddress` + `PostalCode` + `City`) into a unified base column `FullAddress` using a configurable delimiter (e.g. `, ` or space).
+   - **1:N Splitting (One incoming column across multiple base columns)**:
+     - When incoming files combine address and city into a single string (e.g. `10 High Street, London`), but the base file stores them in separate columns (`Address` and `City`), the engine splits the incoming text according to the specified delimiter.
+   - **Composite Equality (Zero False Positives)**:
+     - Before flagging differences, the comparison engine verifies composite equality. If joining the base columns reproduces the incoming combined text, the row is marked as `Unchanged` with zero false change warnings.
+
+---
+
+### Comparison & Text Normalization Options
+
+The mapping table header provides 4 independent normalization switches:
+
+| Option | Behavior | Example |
+|---|---|---|
+| **Ignore Case** | Evaluates uppercase and lowercase strings as equal. | `"LONDON"` == `"London"` |
+| **Trim Whitespace** | Strips leading and trailing spaces prior to comparison. | `" John "` == `"John"` |
+| **Ignore Punctuation & Special Chars** | Compares alphanumeric content while ignoring dots, commas, hyphens, and slashes. | `"St. John St-10"` == `"St John St 10"` |
+| **Ignore Internal Whitespace** | Collapses consecutive spaces, tabs, and line breaks into a single space before comparison. | `"Smith   John"` == `"Smith John"` |
+
+---
+
+### Smart Auto-Mapping Heuristics
+
+Clicking **⚡ Auto Map** invokes a multi-tiered heuristic engine:
+1. **Exact & Case-Insensitive Matching**: Matches identical column headers.
+2. **Smart Fuzzy Stem Matching**:
+   - Strips punctuation and matches header word stems (requiring >= 50% stem overlap).
+   - Tolerates common typos (e.g. `pywyżej` ➔ `powyżej`) and ERP abbreviations (e.g. `niepełn.` ➔ `niepełno.`, `Adres zakładu pracy` ➔ `Adres Pracy`).
+3. **Automatic Split Address & City Detection**:
+   - When the base file contains separate columns for address and city while incoming data has a single combined address column, Auto-Map automatically configures a **Concatenate** rule with `, ` separator.
+4. **SHA-256 Fingerprint Profiles**:
+   - The column mapping configuration is remembered and automatically reapplied on future imports of matching header layouts.
+
+---
+
+## 5. Settings & Metadata Configuration
 
 Click **⚙ Settings** in the top toolbar to configure:
 
@@ -155,7 +209,7 @@ Configures dynamic audit columns stamped on every accepted write:
 
 ---
 
-## 5. Emergency Recovery & Restore
+## 6. Emergency Recovery & Restore
 
 ### Restore from Backup Toolbar Action
 If an erroneous write occurs:
@@ -171,7 +225,7 @@ If a power interruption or system crash occurs during writing:
 
 ---
 
-## 6. Backups and Audit Logs Location
+## 7. Backups and Audit Logs Location
 
 ### Where are the Backup Files Saved?
 - **Folder Location**: Stored in the `Backups/` directory located directly inside the application installation folder (e.g. `UpdateExcelBaseFileProject\Backups\`).
@@ -194,8 +248,8 @@ If a power interruption or system crash occurs during writing:
 
 ---
 
-## 7. Tooltips, Shortcuts & In-App Help
+## 8. Tooltips, Shortcuts & In-App Help
 
-- **Interactive In-App Help**: Press **`F1`** at any time or click **❓ Help** in the top toolbar to open the interactive help dialog with full workflow guides, folder shortcuts, and keyboard references.
+- **Interactive In-App Help**: Press **`F1`** at any time or click **❓ Help** in the top toolbar to open the interactive help dialog with full workflow guides, merge modes, comparison options, folder shortcuts, and keyboard references.
 - **Comprehensive Tooltips**: Hover over any button, input card, dropdown, or table control to view a descriptive tooltip explaining its action and associated keyboard shortcuts.
 - **Multi-Language Support**: All tooltips, help screens, and user guides are fully localized in **English**, **Polish (Polski)**, and **German (Deutsch)**.

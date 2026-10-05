@@ -98,7 +98,15 @@ if ($mappedWithVal.Count -eq 0) {
     throw "No projected values generated in preview items!"
 }
 
-$identicalOrChanged = $prevItems | Where-Object { $_.StatusText -in @('Identyczne', 'Zmiana', 'Nowa wartość') }
+$validStatuses = @(
+    (Get-UiString 'PreviewStatusIdentical'),
+    (Get-UiString 'PreviewStatusChanged'),
+    (Get-UiString 'PreviewStatusNewValue'),
+    'Identyczne', 'Zmiana', 'Nowa wartość',
+    'Identical', 'Will Change', 'New Value',
+    'Identisch', 'Änderung', 'Neuer Wert'
+)
+$identicalOrChanged = @($prevItems | Where-Object { $_.StatusText -in $validStatuses })
 if ($identicalOrChanged.Count -eq 0) {
     throw "Status badges not correctly assigned in preview items!"
 }

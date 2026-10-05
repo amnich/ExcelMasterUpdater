@@ -1303,6 +1303,10 @@ function Get-DefaultAppConfig {
         MarkDeletedMode        = 'ColumnStatus' # 'ColumnStatus' or 'PhysicallyDelete'
         MarkDeletedColumn      = 'StatusOpieki'
         MarkDeletedValue       = 'Usunięty'
+        CompareIgnoreCase      = $true
+        CompareTrimWhitespace  = $true
+        CompareIgnoreSpecialChars = $true
+        CompareIgnoreAllSpaces = $true
         UiLanguage             = 'PL' # 'PL', 'EN', 'DE'
         Theme                  = 'Dark'
         MetadataColumns        = @(
@@ -1498,6 +1502,125 @@ function Save-MappingProfile {
     return $filePath
 }
 
+<#
+.SYNOPSIS
+    Returns localized display name for a mapping rule DiffPolicy.
+#>
+function Get-DiffPolicyDisplay {
+    param([string]$Policy)
+    switch ($Policy) {
+        'IgnoreChanges'       { return (Get-UiString 'DiffPolicyIgnoreChanges' 'Ignoruj zmiany (tylko nowe wpisy)') }
+        'NormalizePostalCode' { return (Get-UiString 'DiffPolicyNormalizePostal' 'Ignoruj obecność kodu pocztowego') }
+        'FuzzyContainment'    { return (Get-UiString 'DiffPolicyFuzzyContainment' 'Ignoruj dopiski w nazwach (zawieranie tekstu)') }
+        default               { return (Get-UiString 'DiffPolicyTrackChanges' 'Śledź zmiany (standard)') }
+    }
+}
+
+<#
+.SYNOPSIS
+    Smart fuzzy matching between incoming column headers and base file headers.
+#>
+function Find-SmartHeaderMatch {
+    param(
+        [string]$IncomingHeader,
+        [string[]]$BaseHeaders
+    )
+    if ([string]::IsNullOrWhiteSpace($IncomingHeader) -or -not $BaseHeaders) { return $null }
+    $cleanIh = ($IncomingHeader -replace '[^\p{L}\p{Nd}\s]', ' ').Trim().ToLowerInvariant()
+    $normIh = $cleanIh -replace '\s+', ''
+    $ihWords = @($cleanIh -split '\s+' | Where-Object { $_.Length -gt 2 })
+
+    # 1. Exact or substring match (ignoring special chars & whitespace)
+    foreach ($bh in $BaseHeaders) {
+        if ([string]::IsNullOrWhiteSpace($bh)) { continue }
+        $cleanBh = ($bh -replace '[^\p{L}\p{Nd}\s]', ' ').Trim().ToLowerInvariant()
+        $normBh = $cleanBh -replace '\s+', ''
+        if ($normBh -eq $normIh -or $normBh.Contains($normIh) -or $normIh.Contains($normBh)) {
+            return $bh
+        }
+    }
+
+    # 2. Word overlap / semantic stem match (>= 50% words shared)
+    if ($ihWords.Count -ge 2) {
+        $bestMatch = $null
+        $bestScore = 0.0
+        foreach ($bh in $BaseHeaders) {
+            if ([string]::IsNullOrWhiteSpace($bh)) { continue }
+            $cleanBh = ($bh -replace '[^\p{L}\p{Nd}\s]', ' ').Trim().ToLowerInvariant()
+            $bhWords = @($cleanBh -split '\s+' | Where-Object { $_.Length -gt 2 })
+            if ($bhWords.Count -eq 0) { continue }
+
+            $shared = 0
+            foreach ($w in $ihWords) {
+                $stem = if ($w.Length -ge 4) { $w.Substring(0, 4) } else { $w }
+                $found = $false
+                foreach ($bw in $bhWords) {
+                    $bStem = if ($bw.Length -ge 4) { $bw.Substring(0, 4) } else { $bw }
+                    if ($stem -eq $bStem) { $found = $true; break }
+                }
+                if ($found) { $shared++ }
+            }
+            $score = [double]$shared / [Math]::Max($ihWords.Count, $bhWords.Count)
+            if ($score -gt $bestScore -and $score -ge 0.5) {
+                $bestScore = $score
+                $bestMatch = $bh
+            }
+        }
+        if ($bestMatch) { return $bestMatch }
+    }
+
+    return $null
+}
+
+<#
+.SYNOPSIS
+    Generates smart mapping rules between base and incoming column headers.
+#>
+function Invoke-AutoMapRules {
+    param(
+        [string[]]$BaseHeaders,
+        [string[]]$IncomingHeaders
+    )
+    $rules = [System.Collections.Generic.List[object]]::new()
+    if (-not $BaseHeaders -or -not $IncomingHeaders) { return $rules }
+
+    $incHasCity = ($IncomingHeaders | Where-Object { $_ -match '(?i)(miasto|miejscowo|city|ort|stadt)' })
+    $baseCityCol = if (-not $incHasCity) {
+        $BaseHeaders | Where-Object { $_ -match '(?i)(miasto|miejscowo|city|ort|stadt)' } | Select-Object -First 1
+    } else { $null }
+
+    foreach ($ih in $IncomingHeaders) {
+        if ($ih -match '(?i)^l\.?\s*p\.?$') { continue }
+        $matched = Find-SmartHeaderMatch -IncomingHeader $ih -BaseHeaders $BaseHeaders
+        if ($matched) {
+            if ($baseCityCol -and $ih -match '(?i)(adres.*zamieszk|adres.*domu|adres.*klient|adres.*dzieck|street|address)' -and $matched -notmatch '(?i)(pracy|firm|szko|plac|zak|work|school)') {
+                $rules.Add([PSCustomObject]@{
+                    BaseColumns       = @($matched, $baseCityCol)
+                    UpdateColumns     = @($ih)
+                    MergeMode         = 'Concatenate'
+                    Separator         = ', '
+                    BaseColsStr       = "$matched, $baseCityCol"
+                    UpdColsStr        = $ih
+                    DiffPolicy        = 'TrackChanges'
+                    DiffPolicyDisplay = (Get-DiffPolicyDisplay 'TrackChanges')
+                })
+            } else {
+                $rules.Add([PSCustomObject]@{
+                    BaseColumns       = @($matched)
+                    UpdateColumns     = @($ih)
+                    MergeMode         = 'Exact'
+                    Separator         = ''
+                    BaseColsStr       = $matched
+                    UpdColsStr        = $ih
+                    DiffPolicy        = 'TrackChanges'
+                    DiffPolicyDisplay = (Get-DiffPolicyDisplay 'TrackChanges')
+                })
+            }
+        }
+    }
+    return $rules
+}
+
 # ==============================================================================
 # Region 4: Import Pipeline & Mapping Projection (Get-ProjectedRow)
 # ==============================================================================
@@ -1520,9 +1643,28 @@ function Save-MappingProfile {
 #>
 function Get-ProjectedRow {
     param(
-        [hashtable]$IncomingValues,
-        [System.Collections.IList]$MappingRules
+        [Parameter(Mandatory = $false)]
+        [Alias('IncomingRow')]
+        $IncomingValues,
+        [Parameter(Mandatory = $false)]
+        [object[]]$MappingRules,
+        [bool]$Trim = $true
     )
+    $valDict = @{}
+    if ($IncomingValues -is [System.Collections.IDictionary]) {
+        foreach ($k in $IncomingValues.Keys) {
+            $valDict[$k] = $IncomingValues[$k]
+        }
+    } elseif ($IncomingValues -is [System.Data.DataRow]) {
+        foreach ($col in $IncomingValues.Table.Columns) {
+            $valDict[$col.ColumnName] = if ($IncomingValues.IsNull($col)) { '' } else { $IncomingValues[$col].ToString() }
+        }
+    } elseif ($null -ne $IncomingValues) {
+        foreach ($p in $IncomingValues.PSObject.Properties) {
+            $valDict[$p.Name] = if ($null -ne $p.Value) { $p.Value.ToString() } else { '' }
+        }
+    }
+
     $projected = @{}
     foreach ($rule in $MappingRules) {
         $bCols = if ($rule -is [System.Collections.IDictionary]) { if ($rule.Contains('BaseColumns')) { $rule['BaseColumns'] } else { $null } } elseif ($rule.PSObject.Properties['BaseColumns']) { $rule.BaseColumns } else { $null }
@@ -1543,7 +1685,7 @@ function Get-ProjectedRow {
 
         # Case 1: Regex split (1 update col -> multiple base cols)
         if (-not [string]::IsNullOrEmpty($sRegex) -and $updCols.Length -ge 1) {
-            $srcVal = if (-not [string]::IsNullOrEmpty($updCols[0]) -and $IncomingValues.ContainsKey($updCols[0])) { $IncomingValues[$updCols[0]] } else { '' }
+            $srcVal = if (-not [string]::IsNullOrEmpty($updCols[0]) -and $valDict.ContainsKey($updCols[0])) { $valDict[$updCols[0]] } else { '' }
             if ($srcVal -match $sRegex) {
                 for ($b = 0; $b -lt $baseCols.Length; $b++) {
                     $bName = $baseCols[$b]
@@ -1552,7 +1694,7 @@ function Get-ProjectedRow {
                     } elseif ($Matches.ContainsKey(($b + 1).ToString())) {
                         $Matches[($b + 1).ToString()]
                     } else { '' }
-                    $projected[$bName] = if ($null -ne $val) { $val.ToString().Trim() } else { '' }
+                    $projected[$bName] = if ($null -ne $val) { if ($Trim) { $val.ToString().Trim() } else { $val.ToString() } } else { '' }
                 }
             }
             continue
@@ -1561,11 +1703,11 @@ function Get-ProjectedRow {
         # Case 2: Delimiter split (1 update col -> multiple base cols)
         $sepToSplit = if (-not [string]::IsNullOrEmpty($sSep)) { $sSep } elseif ($mode -eq 'Concatenate' -and -not [string]::IsNullOrEmpty($sep)) { $sep } else { '' }
         if (-not [string]::IsNullOrEmpty($sepToSplit) -and $updCols.Length -ge 1 -and $baseCols.Length -gt 1) {
-            $srcVal = if (-not [string]::IsNullOrEmpty($updCols[0]) -and $IncomingValues.ContainsKey($updCols[0])) { $IncomingValues[$updCols[0]] } else { '' }
+            $srcVal = if (-not [string]::IsNullOrEmpty($updCols[0]) -and $valDict.ContainsKey($updCols[0])) { $valDict[$updCols[0]] } else { '' }
             $parts = $srcVal -split [regex]::Escape($sepToSplit)
             for ($b = 0; $b -lt $baseCols.Length; $b++) {
                 $bName = $baseCols[$b]
-                $val = if ($b -lt $parts.Length) { $parts[$b].Trim() } else { '' }
+                $val = if ($b -lt $parts.Length) { if ($Trim) { $parts[$b].Trim() } else { $parts[$b] } } else { '' }
                 $projected[$bName] = $val
             }
             continue
@@ -1575,13 +1717,13 @@ function Get-ProjectedRow {
         if ($baseCols.Length -ge 1) {
             $vals = [System.Collections.Generic.List[string]]::new()
             foreach ($u in $updCols) {
-                if (-not [string]::IsNullOrEmpty($u) -and $IncomingValues.ContainsKey($u) -and $null -ne $IncomingValues[$u]) {
-                    $vals.Add($IncomingValues[$u].ToString())
+                if (-not [string]::IsNullOrEmpty($u) -and $valDict.ContainsKey($u) -and $null -ne $valDict[$u]) {
+                    $vals.Add($valDict[$u].ToString())
                 } else {
                     $vals.Add('')
                 }
             }
-            $merged = [FastDiffHelper]::MergeValues($vals, $mode, $sep, $true)
+            $merged = [FastDiffHelper]::MergeValues($vals, $mode, $sep, $Trim)
             $projected[$baseCols[0]] = $merged
         }
     }
@@ -1629,7 +1771,11 @@ function Build-JoinKey {
     $sb = [System.Text.StringBuilder]::new()
     for ($i = 0; $i -lt $KeyColumns.Length; $i++) {
         $col = $KeyColumns[$i]
-        $v = if ($RowValues.ContainsKey($col) -and $null -ne $RowValues[$col]) { $RowValues[$col].ToString() } else { '' }
+        $v = if ($RowValues -is [System.Collections.IDictionary]) {
+            if ($RowValues.Contains($col) -and $null -ne $RowValues[$col]) { $RowValues[$col].ToString() } else { '' }
+        } elseif ($RowValues -and $RowValues.PSObject.Properties[$col]) {
+            if ($null -ne $RowValues.$col) { $RowValues.$col.ToString() } else { '' }
+        } else { '' }
         $norm = [FastDiffHelper]::Normalize($v, $IgnoreCase, $Trim, $IgnoreSpecialChars, $IgnoreAllSpaces)
         if ($i -gt 0) { [void]$sb.Append('|||') }
         [void]$sb.Append($norm)
@@ -1689,23 +1835,59 @@ function Invoke-MasterCompare {
         [System.Collections.IList]$BaseRows,         # List of PSCustomObject @{ RowNumber; Values }
         [System.Collections.IList]$IncomingRows,     # List of PSCustomObject @{ SourceRowNumber; Values; SourceFilePath }
         [object]$MappingProfile,
-        [System.Collections.IList]$MappingRules,
+        [object[]]$MappingRules,
         [string[]]$BaseJoinKey,
         [string[]]$IncomingJoinKey,
         [string[]]$BaseHeaders,
+        [hashtable]$CompareOptions = $null,
         [string[]]$MetadataColumns = @('OstZmiana', 'ZrodloSciezka', 'ZrodloPlik', 'Zmienil', 'ZrodloWiersz', 'ImportId'),
         [bool]$DetectRemoved = $false,
         [string]$MarkDeletedColumn = 'StatusOpieki',
         [string]$MarkDeletedValue = 'Usunięty'
     )
 
-    $rules = if ($MappingRules) { $MappingRules } elseif ($MappingProfile -and $MappingProfile.MappingRules) { $MappingProfile.MappingRules } else { @() }
+    $rules = if ($MappingRules) { @($MappingRules) } elseif ($MappingProfile -and $MappingProfile.MappingRules) { @($MappingProfile.MappingRules) } else { @() }
     $joinBase = if ($BaseJoinKey) { @($BaseJoinKey) } elseif ($MappingProfile -and $MappingProfile.JoinKeyBase) { @($MappingProfile.JoinKeyBase) } else { @() }
     $joinUpd = if ($IncomingJoinKey) { @($IncomingJoinKey) } elseif ($MappingProfile -and $MappingProfile.JoinKeyUpdate) { @($MappingProfile.JoinKeyUpdate) } else { @() }
-    $opts = if ($MappingProfile -and $MappingProfile.CompareOptions) {
+    $rawOpts = if ($CompareOptions) {
+        $CompareOptions
+    } elseif ($MappingProfile -and $MappingProfile.CompareOptions) {
         $MappingProfile.CompareOptions
     } else {
         @{ IgnoreCase = $true; Trim = $true; IgnoreSpecialChars = $true; IgnoreAllSpaces = $true }
+    }
+    $optTrim = if ($rawOpts -is [System.Collections.IDictionary]) {
+        if ($rawOpts.Contains('Trim')) { [bool]$rawOpts['Trim'] } elseif ($rawOpts.Contains('TrimWhitespace')) { [bool]$rawOpts['TrimWhitespace'] } else { $true }
+    } elseif ($rawOpts.PSObject.Properties['Trim']) {
+        [bool]$rawOpts.Trim
+    } elseif ($rawOpts.PSObject.Properties['TrimWhitespace']) {
+        [bool]$rawOpts.TrimWhitespace
+    } else { $true }
+
+    $optCase = if ($rawOpts -is [System.Collections.IDictionary]) {
+        if ($rawOpts.Contains('IgnoreCase')) { [bool]$rawOpts['IgnoreCase'] } else { $true }
+    } elseif ($rawOpts.PSObject.Properties['IgnoreCase']) {
+        [bool]$rawOpts.IgnoreCase
+    } else { $true }
+
+    $optSpec = if ($rawOpts -is [System.Collections.IDictionary]) {
+        if ($rawOpts.Contains('IgnoreSpecialChars')) { [bool]$rawOpts['IgnoreSpecialChars'] } else { $true }
+    } elseif ($rawOpts.PSObject.Properties['IgnoreSpecialChars']) {
+        [bool]$rawOpts.IgnoreSpecialChars
+    } else { $true }
+
+    $optSpc = if ($rawOpts -is [System.Collections.IDictionary]) {
+        if ($rawOpts.Contains('IgnoreAllSpaces')) { [bool]$rawOpts['IgnoreAllSpaces'] } else { $true }
+    } elseif ($rawOpts.PSObject.Properties['IgnoreAllSpaces']) {
+        [bool]$rawOpts.IgnoreAllSpaces
+    } else { $true }
+
+    $opts = @{
+        IgnoreCase         = $optCase
+        Trim               = $optTrim
+        TrimWhitespace     = $optTrim
+        IgnoreSpecialChars = $optSpec
+        IgnoreAllSpaces    = $optSpc
     }
     $emptyMeansClear = if ($MappingProfile) { [bool]$MappingProfile.EmptyIncomingMeansClear } else { $false }
 
@@ -1713,6 +1895,11 @@ function Invoke-MasterCompare {
     $normalizedBaseRows = [System.Collections.Generic.List[object]]::new()
     foreach ($b in $BaseRows) {
         if ($b.PSObject.Properties['Values']) {
+            if ($b.Values -is [System.Collections.IDictionary] -and $b.Values -isnot [System.Collections.Hashtable]) {
+                $h = @{}
+                foreach ($k in $b.Values.Keys) { $h[$k] = $b.Values[$k] }
+                $b.Values = $h
+            }
             $normalizedBaseRows.Add($b)
         } else {
             $vals = @{}
@@ -1728,6 +1915,11 @@ function Invoke-MasterCompare {
     $normalizedIncRows = [System.Collections.Generic.List[object]]::new()
     foreach ($inc in $IncomingRows) {
         if ($inc.PSObject.Properties['Values']) {
+            if ($inc.Values -is [System.Collections.IDictionary] -and $inc.Values -isnot [System.Collections.Hashtable]) {
+                $h = @{}
+                foreach ($k in $inc.Values.Keys) { $h[$k] = $inc.Values[$k] }
+                $inc.Values = $h
+            }
             # Ensure SourceFilePath is present even for pre-normalized rows
             if (-not $inc.PSObject.Properties['SourceFilePath']) {
                 $inc.PSObject.Properties.Add([System.Management.Automation.PSNoteProperty]::new('SourceFilePath', ''))
@@ -1764,7 +1956,7 @@ function Invoke-MasterCompare {
     foreach ($inc in $normalizedIncRows) {
         $idx++
         $srcRowNum = $inc.SourceRowNumber
-        $projected = Get-ProjectedRow -IncomingValues $inc.Values -MappingRules $rules
+        $projected = Get-ProjectedRow -IncomingValues $inc.Values -MappingRules $rules -Trim $opts.Trim
 
         # Check for empty incoming join key
         $hasEmptyKey = $false
@@ -1872,6 +2064,13 @@ function Invoke-MasterCompare {
                     $uCols = if ($rule -is [System.Collections.IDictionary]) { if ($rule.Contains('UpdateColumns')) { @($rule['UpdateColumns']) } else { @() } } elseif ($rule.PSObject.Properties['UpdateColumns']) { @($rule.UpdateColumns) } else { @() }
                     $mMode = if ($rule -is [System.Collections.IDictionary]) { if ($rule.Contains('MergeMode')) { $rule['MergeMode'] } else { 'Exact' } } elseif ($rule.PSObject.Properties['MergeMode']) { $rule.MergeMode } else { 'Exact' }
                     $sep   = if ($rule -is [System.Collections.IDictionary]) { if ($rule.Contains('Separator')) { $rule['Separator'] } else { '' } } elseif ($rule.PSObject.Properties['Separator']) { $rule.Separator } else { '' }
+                    $diffPolicy = if ($rule -is [System.Collections.IDictionary]) { if ($rule.Contains('DiffPolicy')) { $rule['DiffPolicy'] } else { 'TrackChanges' } } elseif ($rule.PSObject.Properties['DiffPolicy']) { $rule.DiffPolicy } else { 'TrackChanges' }
+                    if ([string]::IsNullOrWhiteSpace($diffPolicy)) { $diffPolicy = 'TrackChanges' }
+
+                    # Skip change generation for existing rows if policy is IgnoreChanges (values stay projected for new rows)
+                    if ($diffPolicy -eq 'IgnoreChanges') {
+                        continue
+                    }
 
                     $bCols = @($bCols | Where-Object { $null -ne $_ -and [string]::IsNullOrWhiteSpace($_) -eq $false })
                     $uCols = @($uCols | Where-Object { $null -ne $_ -and [string]::IsNullOrWhiteSpace($_) -eq $false })
@@ -1893,6 +2092,20 @@ function Invoke-MasterCompare {
                         $uMerged = [FastDiffHelper]::MergeValues($uVals, $mMode, $sep, $opts.Trim)
 
                         $isEqualOverall = [FastDiffHelper]::AreEqual($bMerged, $uMerged, $opts.IgnoreCase, $opts.Trim, $opts.IgnoreSpecialChars, $opts.IgnoreAllSpaces)
+                        if (-not $isEqualOverall -and $diffPolicy -eq 'NormalizePostalCode') {
+                            $bmNorm = ($bMerged -replace '\b\d{2}-\d{3}\b|\b\d{5}\b', ' ') -replace '\s+', ' '
+                            $umNorm = ($uMerged -replace '\b\d{2}-\d{3}\b|\b\d{5}\b', ' ') -replace '\s+', ' '
+                            $isEqualOverall = [FastDiffHelper]::AreEqual($bmNorm, $umNorm, $opts.IgnoreCase, $opts.Trim, $opts.IgnoreSpecialChars, $opts.IgnoreAllSpaces)
+                        }
+                        if (-not $isEqualOverall -and $diffPolicy -eq 'FuzzyContainment') {
+                            $bmClean = ($bMerged -replace '[^\p{L}\p{Nd}\s]', ' ').Trim().ToLowerInvariant() -replace '\s+', ' '
+                            $umClean = ($uMerged -replace '[^\p{L}\p{Nd}\s]', ' ').Trim().ToLowerInvariant() -replace '\s+', ' '
+                            if (-not [string]::IsNullOrWhiteSpace($bmClean) -and -not [string]::IsNullOrWhiteSpace($umClean)) {
+                                if ($bmClean.Contains($umClean) -or $umClean.Contains($bmClean)) {
+                                    $isEqualOverall = $true
+                                }
+                            }
+                        }
                         if ($isEqualOverall) {
                             continue
                         }
@@ -1909,8 +2122,24 @@ function Invoke-MasterCompare {
                         }
 
                         $isEqual = [FastDiffHelper]::AreEqual($bVal, $uVal, $opts.IgnoreCase, $opts.Trim, $opts.IgnoreSpecialChars, $opts.IgnoreAllSpaces)
+                        if (-not $isEqual -and $diffPolicy -eq 'NormalizePostalCode') {
+                            $bNorm = ($bVal -replace '\b\d{2}-\d{3}\b|\b\d{5}\b', ' ') -replace '\s+', ' '
+                            $uNorm = ($uVal -replace '\b\d{2}-\d{3}\b|\b\d{5}\b', ' ') -replace '\s+', ' '
+                            $isEqual = [FastDiffHelper]::AreEqual($bNorm, $uNorm, $opts.IgnoreCase, $opts.Trim, $opts.IgnoreSpecialChars, $opts.IgnoreAllSpaces)
+                        }
+                        if (-not $isEqual -and $diffPolicy -eq 'FuzzyContainment') {
+                            $bClean = ($bVal -replace '[^\p{L}\p{Nd}\s]', ' ').Trim().ToLowerInvariant() -replace '\s+', ' '
+                            $uClean = ($uVal -replace '[^\p{L}\p{Nd}\s]', ' ').Trim().ToLowerInvariant() -replace '\s+', ' '
+                            if (-not [string]::IsNullOrWhiteSpace($bClean) -and -not [string]::IsNullOrWhiteSpace($uClean)) {
+                                if ($bClean.Contains($uClean) -or $uClean.Contains($bClean)) {
+                                    $isEqual = $true
+                                }
+                            }
+                        }
+
                         if (-not $isEqual) {
-                            $colIdx = [System.Array]::IndexOf($BaseHeaders, $baseCol)
+                            $colIdx = if ($BaseHeaders) { [System.Array]::IndexOf($BaseHeaders, $baseCol) } else { 0 }
+                            $colIdx = if ($colIdx -lt 0) { 0 } else { $colIdx }
                             $colLetter = [FastExcelHelper]::ColIndexToName($colIdx)
                             $cellRef = "$colLetter$($matched.RowNumber)"
                             $changes.Add([ordered]@{
@@ -1919,6 +2148,8 @@ function Invoke-MasterCompare {
                                 CellRef           = $cellRef
                                 OldValue          = $bVal
                                 NewValue          = $uVal
+                                OriginalNewValue  = $uVal
+                                CustomEdited      = $false
                                 SelectedForUpdate = $true # Q8: by default checked, can be deselected
                             })
                         }
@@ -2186,18 +2417,31 @@ function Invoke-MasterWriteBack {
     $metaCols = @($AppConfig.MetadataColumns)
     $headersList = [System.Collections.Generic.List[string]]::new([string[]]$BaseHeaders)
 
+    $getMetaProp = {
+        param($mObj, [string]$prop)
+        if ($null -eq $mObj) { return $null }
+        if ($mObj -is [System.Collections.IDictionary]) {
+            if ($mObj.Contains($prop)) { return $mObj[$prop] }
+            return $null
+        }
+        if ($mObj.PSObject.Properties[$prop]) {
+            return $mObj.$prop
+        }
+        return $null
+    }
+
     # 2. Check for missing metadata columns in base headers
     $missingMeta = [System.Collections.Generic.List[object]]::new()
     foreach ($m in $metaCols) {
-        $colName = $m.BaseColumn
-        if (-not $headersList.Contains($colName)) {
+        $colName = & $getMetaProp $m 'BaseColumn'
+        if (-not [string]::IsNullOrWhiteSpace($colName) -and -not $headersList.Contains($colName)) {
             $missingMeta.Add($m)
             $headersList.Add($colName)
         }
     }
 
     $isCsv = $BaseFilePath -match '\.csv$'
-    $writeMode = if ($isCsv) { 'SafeRewrite' } else { $AppConfig.WriteMode }
+    $writeMode = if ($isCsv) { 'SafeRewrite' } elseif ($AppConfig -and $AppConfig.WriteMode) { $AppConfig.WriteMode } else { 'InPlace' }
 
     $acceptedItems = [System.Collections.Generic.List[object]]::new()
     foreach ($it in $ReviewItems) {
@@ -2277,9 +2521,13 @@ function Invoke-MasterWriteBack {
 
                 # Stamp metadata
                 foreach ($m in $metaCols) {
-                    $cIdx = $headersList.IndexOf($m.BaseColumn)
+                    $mCol = & $getMetaProp $m 'BaseColumn'
+                    if ([string]::IsNullOrWhiteSpace($mCol)) { continue }
+                    $cIdx = $headersList.IndexOf($mCol)
                     if ($cIdx -ge 0) {
-                        $metaVal = Get-StampedMetadataValue -Token $m.Token -Format $m.Format -IncomingRow $item.IncomingRow -BatchId $BatchId
+                        $mTok = & $getMetaProp $m 'Token'
+                        $mFmt = & $getMetaProp $m 'Format'
+                        $metaVal = Get-StampedMetadataValue -Token $mTok -Format $mFmt -IncomingRow $item.IncomingRow -BatchId $BatchId
                         $patchOp.Cells[$cIdx] = $metaVal
                     }
                 }
@@ -2303,9 +2551,13 @@ function Invoke-MasterWriteBack {
 
                 # Stamp metadata
                 foreach ($m in $metaCols) {
-                    $cIdx = $headersList.IndexOf($m.BaseColumn)
+                    $mCol = & $getMetaProp $m 'BaseColumn'
+                    if ([string]::IsNullOrWhiteSpace($mCol)) { continue }
+                    $cIdx = $headersList.IndexOf($mCol)
                     if ($cIdx -ge 0) {
-                        $metaVal = Get-StampedMetadataValue -Token $m.Token -Format $m.Format -IncomingRow $item.IncomingRow -BatchId $BatchId
+                        $mTok = & $getMetaProp $m 'Token'
+                        $mFmt = & $getMetaProp $m 'Format'
+                        $metaVal = Get-StampedMetadataValue -Token $mTok -Format $mFmt -IncomingRow $item.IncomingRow -BatchId $BatchId
                         $appendOp.Cells[$cIdx] = $metaVal
                     }
                 }
@@ -2370,8 +2622,11 @@ function Invoke-MasterWriteBack {
                     }
                     # Stamp metadata
                     foreach ($m in $metaCols) {
-                        $col = $m.BaseColumn
-                        $metaVal = Get-StampedMetadataValue -Token $m.Token -Format $m.Format -IncomingRow $item.IncomingRow -BatchId $BatchId
+                        $col = & $getMetaProp $m 'BaseColumn'
+                        if ([string]::IsNullOrWhiteSpace($col)) { continue }
+                        $mTok = & $getMetaProp $m 'Token'
+                        $mFmt = & $getMetaProp $m 'Format'
+                        $metaVal = Get-StampedMetadataValue -Token $mTok -Format $mFmt -IncomingRow $item.IncomingRow -BatchId $BatchId
                         if (-not $targetR.PSObject.Properties[$col]) {
                             $targetR.PSObject.Properties.Add([System.Management.Automation.PSNoteProperty]::new($col, $metaVal))
                         } else {
@@ -2388,8 +2643,11 @@ function Invoke-MasterWriteBack {
                 }
                 # Stamp metadata
                 foreach ($m in $metaCols) {
-                    $col = $m.BaseColumn
-                    $metaVal = Get-StampedMetadataValue -Token $m.Token -Format $m.Format -IncomingRow $item.IncomingRow -BatchId $BatchId
+                    $col = & $getMetaProp $m 'BaseColumn'
+                    if ([string]::IsNullOrWhiteSpace($col)) { continue }
+                    $mTok = & $getMetaProp $m 'Token'
+                    $mFmt = & $getMetaProp $m 'Format'
+                    $metaVal = Get-StampedMetadataValue -Token $mTok -Format $mFmt -IncomingRow $item.IncomingRow -BatchId $BatchId
                     if ($newObj.PSObject.Properties[$col]) {
                         $newObj.$col = $metaVal
                     } else {
@@ -3093,7 +3351,7 @@ function Invoke-HeadlessMasterUpdater {
         }
     }
 
-    $comp = @(Invoke-MasterCompare -BaseRows $baseRaw -IncomingRows $incRaw -MappingRules $rules -BaseJoinKey $joinBase -IncomingJoinKey $joinInc -BaseHeaders $baseHeaders -DetectRemoved ($cfg.DetectRemovedRows -eq $true) -MarkDeletedColumn $cfg.MarkDeletedColumn -MarkDeletedValue $cfg.MarkDeletedValue)
+    $comp = @(Invoke-MasterCompare -BaseRows $baseRaw -IncomingRows $incRaw -MappingProfile $profile -MappingRules $rules -BaseJoinKey $joinBase -IncomingJoinKey $joinInc -BaseHeaders $baseHeaders -DetectRemoved ($cfg.DetectRemovedRows -eq $true) -MarkDeletedColumn $cfg.MarkDeletedColumn -MarkDeletedValue $cfg.MarkDeletedValue)
 
     $reviewItems = [System.Collections.Generic.List[object]]::new()
     $idx = 1
@@ -4248,8 +4506,9 @@ function Show-MasterUpdater {
                                 <DataGrid.Columns>
                                     <DataGridTextColumn x:Name="colBase" Header="Kolumny w bazie" Binding="{Binding BaseColsStr}" Width="*"/>
                                     <DataGridTextColumn x:Name="colIncoming" Header="Kolumny w pliku zmian" Binding="{Binding UpdColsStr}" Width="*"/>
-                                    <DataGridTextColumn x:Name="colMergeMode" Header="Tryb łączenia" Binding="{Binding MergeMode}" Width="130"/>
-                                    <DataGridTextColumn x:Name="colSeparator" Header="Separator" Binding="{Binding Separator}" Width="90"/>
+                                    <DataGridTextColumn x:Name="colMergeMode" Header="Tryb łączenia" Binding="{Binding MergeMode}" Width="120"/>
+                                    <DataGridTextColumn x:Name="colSeparator" Header="Separator" Binding="{Binding Separator}" Width="80"/>
+                                    <DataGridTextColumn x:Name="colDiffPolicy" Header="Zasada zmian" Binding="{Binding DiffPolicyDisplay}" Width="160"/>
                                 </DataGrid.Columns>
                             </DataGrid>
                         </Border>
@@ -4399,9 +4658,24 @@ function Show-MasterUpdater {
                         </Grid>
                     </Border>
 
-                    <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,0">
-                        <Button x:Name="btnRunCompare" Content="Rozpocznij porównanie ▶" Background="{DynamicResource AccentGreen}" Foreground="#FFFFFF" FontWeight="Bold" FontSize="14" BorderThickness="0" Padding="26,10"/>
-                    </StackPanel>
+                    <Border Grid.Row="4" Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderCard}" BorderThickness="1" CornerRadius="8" Padding="14,10" Margin="0,10,0,0">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0" Orientation="Vertical" VerticalAlignment="Center" Margin="0,0,16,0">
+                                <TextBlock x:Name="lblCompareOptionsTitle" Text="⚙️ Opcje trybu porównywania:" FontWeight="SemiBold" FontSize="12" Foreground="{DynamicResource TextSecondary}" Margin="0,0,0,6"/>
+                                <WrapPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                    <CheckBox x:Name="chkIgnoreCase" Content="Ignoruj wielkość liter" IsChecked="True" Foreground="{DynamicResource TextPrimary}" Margin="0,0,18,2" VerticalContentAlignment="Center" Cursor="Hand"/>
+                                    <CheckBox x:Name="chkTrimWhitespace" Content="Przycinaj białe znaki" IsChecked="True" Foreground="{DynamicResource TextPrimary}" Margin="0,0,18,2" VerticalContentAlignment="Center" Cursor="Hand"/>
+                                    <CheckBox x:Name="chkIgnoreSpecialChars" Content="Ignoruj interpunkcję i znaki specjalne" IsChecked="True" Foreground="{DynamicResource TextPrimary}" Margin="0,0,18,2" VerticalContentAlignment="Center" Cursor="Hand"/>
+                                    <CheckBox x:Name="chkIgnoreAllSpaces" Content="Ignoruj spacje wewnętrzne" IsChecked="True" Foreground="{DynamicResource TextPrimary}" Margin="0,0,18,2" VerticalContentAlignment="Center" Cursor="Hand"/>
+                                </WrapPanel>
+                            </StackPanel>
+                            <Button x:Name="btnRunCompare" Grid.Column="1" Content="Rozpocznij porównanie ▶" Background="{DynamicResource AccentGreen}" Foreground="#FFFFFF" FontWeight="Bold" FontSize="14" BorderThickness="0" Padding="26,10" VerticalAlignment="Center" Cursor="Hand"/>
+                        </Grid>
+                    </Border>
                 </Grid>
             </TabItem>
 
@@ -4538,6 +4812,13 @@ function Show-MasterUpdater {
                         <Border x:Name="detailBorder" Grid.Column="2" Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderCard}" BorderThickness="1" CornerRadius="8" Padding="18">
                             <ScrollViewer VerticalScrollBarVisibility="Auto">
                                 <StackPanel x:Name="panelDetailContent">
+                                    <!-- Batch Column Toggles Banner -->
+                                    <Border x:Name="cardBatchToggles" Background="{DynamicResource BgCardHover}" BorderBrush="{DynamicResource BorderCard}" BorderThickness="1" CornerRadius="6" Padding="10,8" Margin="0,0,0,14" Visibility="Collapsed">
+                                        <StackPanel>
+                                            <TextBlock x:Name="lblBatchColToggles" Text="Szybkie przełączanie kolumn (przejmij wybrane pola):" Foreground="{DynamicResource TextSecondary}" FontSize="11" FontWeight="SemiBold" Margin="0,0,0,6"/>
+                                            <WrapPanel x:Name="wrapBatchColToggles" Orientation="Horizontal"/>
+                                        </StackPanel>
+                                    </Border>
                                     <Border BorderBrush="{DynamicResource BorderCard}" BorderThickness="0,0,0,1" Padding="0,0,0,12" Margin="0,0,0,12">
                                         <TextBlock x:Name="txtDetailHeader" Text="Wybierz wiersz z listy po lewej stronie" Foreground="{DynamicResource TextPrimary}" FontSize="16" FontWeight="Bold"/>
                                     </Border>
@@ -4601,12 +4882,18 @@ function Show-MasterUpdater {
                                 <Button x:Name="btnEditRow" Content="✏ Zmień wartość... (E)" Background="{DynamicResource AccentAmber}" Foreground="#FFFFFF" BorderThickness="0" Margin="0,0,6,0"/>
                                 <Button x:Name="btnUndo" Content="↩ Cofnij (Ctrl+Z)" IsEnabled="False"/>
                             </StackPanel>
-                            <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Center">
-                                <Button x:Name="btnAcceptAll" Content="✔✔ Akceptuj wszystkie" Background="{DynamicResource AccentGreen}" Foreground="#FFFFFF" BorderThickness="0" Margin="0,0,6,0"/>
-                                <Button x:Name="btnRejectAll" Content="✖✖ Odrzuć wszystkie" Background="{DynamicResource AccentRed}" Foreground="#FFFFFF" BorderThickness="0" Margin="0,0,6,0"/>
-                                <Button x:Name="btnExportReport" Content="📊 Eksportuj raport..."/>
+                            <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                                    <Button x:Name="btnAcceptAll" Content="✔✔ Akceptuj wszystkie" Background="{DynamicResource AccentGreen}" Foreground="#FFFFFF" BorderThickness="0" Margin="0,0,6,0"/>
+                                    <Button x:Name="btnRejectAll" Content="✖✖ Odrzuć wszystkie" Background="{DynamicResource AccentRed}" Foreground="#FFFFFF" BorderThickness="0" Margin="0,0,6,0"/>
+                                    <Button x:Name="btnExportReport" Content="📊 Eksportuj raport..."/>
+                                </StackPanel>
+                                <TextBlock x:Name="txtStagingSummary" Text="" HorizontalAlignment="Center" Foreground="{DynamicResource TextSecondary}" FontSize="11" Margin="0,4,0,0"/>
                             </StackPanel>
-                            <Button x:Name="btnApplyAccepted" Grid.Column="2" Content="Zastosuj zaakceptowane zmiany do bazy" Background="{DynamicResource AccentBlue}" Foreground="#FFFFFF" FontWeight="Bold" FontSize="13" BorderThickness="0" Padding="22,8" IsEnabled="False"/>
+                            <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                                <Button x:Name="btnApplyAccepted" Content="Zastosuj do bazy" Background="{DynamicResource AccentBlue}" Foreground="#FFFFFF" FontWeight="Bold" FontSize="13" BorderThickness="0" Padding="14,8" Margin="0,0,6,0" IsEnabled="False"/>
+                                <Button x:Name="btnApplyToNewFile" Content="💾 Zapisz do nowego pliku..." Background="{DynamicResource AccentPurple}" Foreground="#FFFFFF" FontWeight="Bold" FontSize="13" BorderThickness="0" Padding="14,8" IsEnabled="False"/>
+                            </StackPanel>
                         </Grid>
                     </Border>
                 </Grid>
@@ -4696,6 +4983,7 @@ function Show-MasterUpdater {
     $colIncoming        = $window.FindName('colIncoming')
     $colMergeMode       = $window.FindName('colMergeMode')
     $colSeparator       = $window.FindName('colSeparator')
+    $colDiffPolicy      = $window.FindName('colDiffPolicy')
     $joinBorder         = $window.FindName('joinBorder')
         $lblJoinKeyTitle    = $window.FindName('lblJoinKeyTitle')
     $lblJoinKeyHint     = $window.FindName('lblJoinKeyHint')
@@ -4705,6 +4993,19 @@ function Show-MasterUpdater {
     $lblJoinIncomingSub = $window.FindName('lblJoinIncomingSub')
     $script:lbJoinIncoming = $window.FindName('lbJoinIncoming')
     $lbJoinIncoming     = $script:lbJoinIncoming
+    $lblCompareOptionsTitle       = $window.FindName('lblCompareOptionsTitle')
+    $script:chkIgnoreCase         = $window.FindName('chkIgnoreCase')
+    $chkIgnoreCase                = $script:chkIgnoreCase
+    $script:chkTrimWhitespace     = $window.FindName('chkTrimWhitespace')
+    $chkTrimWhitespace            = $script:chkTrimWhitespace
+    $script:chkIgnoreSpecialChars = $window.FindName('chkIgnoreSpecialChars')
+    $chkIgnoreSpecialChars        = $script:chkIgnoreSpecialChars
+    $script:chkIgnoreAllSpaces    = $window.FindName('chkIgnoreAllSpaces')
+    $chkIgnoreAllSpaces           = $script:chkIgnoreAllSpaces
+    if ($chkIgnoreCase -and $null -ne $script:AppConfig.CompareIgnoreCase) { $chkIgnoreCase.IsChecked = [bool]$script:AppConfig.CompareIgnoreCase }
+    if ($chkTrimWhitespace -and $null -ne $script:AppConfig.CompareTrimWhitespace) { $chkTrimWhitespace.IsChecked = [bool]$script:AppConfig.CompareTrimWhitespace }
+    if ($chkIgnoreSpecialChars -and $null -ne $script:AppConfig.CompareIgnoreSpecialChars) { $chkIgnoreSpecialChars.IsChecked = [bool]$script:AppConfig.CompareIgnoreSpecialChars }
+    if ($chkIgnoreAllSpaces -and $null -ne $script:AppConfig.CompareIgnoreAllSpaces) { $chkIgnoreAllSpaces.IsChecked = [bool]$script:AppConfig.CompareIgnoreAllSpaces }
     $btnRunCompare      = $window.FindName('btnRunCompare')
     $filterBorder       = $window.FindName('filterBorder')
     $script:txtCounters = $window.FindName('txtCounters')
@@ -4748,6 +5049,9 @@ function Show-MasterUpdater {
     $script:lbReviewItems = $window.FindName('lbReviewItems')
     $lbReviewItems      = $script:lbReviewItems
     $detailBorder       = $window.FindName('detailBorder')
+    $cardBatchToggles   = $window.FindName('cardBatchToggles')
+    $lblBatchColToggles = $window.FindName('lblBatchColToggles')
+    $wrapBatchColToggles = $window.FindName('wrapBatchColToggles')
     $txtDetailHeader    = $window.FindName('txtDetailHeader')
     $panelDiffContainer = $window.FindName('panelDiffContainer')
     $baseRowBorder      = $window.FindName('baseRowBorder')
@@ -4765,7 +5069,9 @@ function Show-MasterUpdater {
     $btnAcceptAll       = $window.FindName('btnAcceptAll')
     $btnRejectAll       = $window.FindName('btnRejectAll')
     $btnExportReport    = $window.FindName('btnExportReport')
+    $txtStagingSummary  = $window.FindName('txtStagingSummary')
     $btnApplyAccepted   = $window.FindName('btnApplyAccepted')
+    $btnApplyToNewFile  = $window.FindName('btnApplyToNewFile')
     $statusBar          = $window.FindName('statusBar')
     $script:txtStatusMsg = $window.FindName('txtStatusMsg')
     $txtStatusMsg       = $script:txtStatusMsg
@@ -4825,6 +5131,8 @@ function Show-MasterUpdater {
         $script:CurrentTheme = $ThemeName
         $p = Get-UpdaterThemePalette $ThemeName
         $isDark = $p.IsDark
+        $w = if ($script:ActiveWindow) { $script:ActiveWindow } elseif ($script:window) { $script:window } else { $window }
+        if (-not $w) { return }
 
         # Update dynamic brushes in Window Resources (freeze each brush for thread-safety and performance)
         foreach ($k in $p.Keys) {
@@ -4832,138 +5140,169 @@ function Show-MasterUpdater {
                 $c = [System.Windows.Media.ColorConverter]::ConvertFromString($p[$k])
                 $brush = [System.Windows.Media.SolidColorBrush]::new($c)
                 $brush.Freeze()
-                $window.Resources[$k] = $brush
+                $w.Resources[$k] = $brush
+            }
+        }
+
+        $setBrush = {
+            param($elem, $prop, $resKey)
+            if (-not $elem) { return }
+            $b = $w.Resources[$resKey]
+            if (-not $b) { return }
+            $ctrl = if ($elem -is [string]) { $w.FindName($elem) } else { $elem }
+            if ($ctrl) {
+                try { $ctrl.$prop = $b } catch {}
             }
         }
 
         # Apply root canvas backgrounds & foregrounds
-        $window.Background = $window.Resources['BgApp']
-        $window.Foreground = $window.Resources['TextPrimary']
-        $mainGrid.Background = $window.Resources['BgApp']
-        $topHeaderBorder.Background = $window.Resources['BgHeader']
-        $topHeaderBorder.BorderBrush = $window.Resources['BorderCard']
-        $mainTabs.Background = $window.Resources['BgApp']
-        $joinBorder.Background = $window.Resources['BgCard']
-        $joinBorder.BorderBrush = $window.Resources['BorderCard']
-        $filterBorder.Background = $window.Resources['BgCard']
-        $filterBorder.BorderBrush = $window.Resources['BorderCard']
-        $detailBorder.Background = $window.Resources['BgCard']
-        $detailBorder.BorderBrush = $window.Resources['BorderCard']
-        if ($baseRowBorder) {
-            $baseRowBorder.Background = $window.Resources['BgCard']
-            $baseRowBorder.BorderBrush = $window.Resources['BorderCard']
-        }
-        $actionBorder.Background = $window.Resources['BgCard']
-        $actionBorder.BorderBrush = $window.Resources['BorderCard']
-        $statusBar.Background = $window.Resources['StatusBarBg']
-        $statusBar.Foreground = $window.Resources['StatusBarFg']
-        $statusBar.BorderBrush = $window.Resources['BorderCard']
+        try {
+            $w.Background = $w.Resources['BgApp']
+            $w.Foreground = $w.Resources['TextPrimary']
+        } catch {}
+
+        & $setBrush 'mainGrid' 'Background' 'BgApp'
+        & $setBrush 'topHeaderBorder' 'Background' 'BgHeader'
+        & $setBrush 'topHeaderBorder' 'BorderBrush' 'BorderCard'
+        & $setBrush 'mainTabs' 'Background' 'BgApp'
+        & $setBrush 'joinBorder' 'Background' 'BgCard'
+        & $setBrush 'joinBorder' 'BorderBrush' 'BorderCard'
+        & $setBrush 'filterBorder' 'Background' 'BgCard'
+        & $setBrush 'filterBorder' 'BorderBrush' 'BorderCard'
+        & $setBrush 'detailBorder' 'Background' 'BgCard'
+        & $setBrush 'detailBorder' 'BorderBrush' 'BorderCard'
+        & $setBrush 'baseRowBorder' 'Background' 'BgCard'
+        & $setBrush 'baseRowBorder' 'BorderBrush' 'BorderCard'
+        & $setBrush 'actionBorder' 'Background' 'BgCard'
+        & $setBrush 'actionBorder' 'BorderBrush' 'BorderCard'
+        & $setBrush 'statusBar' 'Background' 'StatusBarBg'
+        & $setBrush 'statusBar' 'Foreground' 'StatusBarFg'
+        & $setBrush 'statusBar' 'BorderBrush' 'BorderCard'
 
         # Text labels and titles
-        $txtAppTitle.Foreground = $window.Resources['TextPrimary']
-        $lblBasePath.Foreground = $window.Resources['TextSecondary']
-        $lblBaseSheet.Foreground = $window.Resources['TextSecondary']
-        $lblIncomingPath.Foreground = $window.Resources['TextSecondary']
-        $lblIncomingSheet.Foreground = $window.Resources['TextSecondary']
-        $lblLanguage.Foreground = $window.Resources['TextSecondary']
-        $lblJoinKeyTitle.Foreground = $window.Resources['TextPrimary']
-        $lblJoinBaseSub.Foreground = $window.Resources['TextSecondary']
-        $lblJoinIncomingSub.Foreground = $window.Resources['TextSecondary']
-        $txtCounters.Foreground = $window.Resources['TextPrimary']
-        $txtDetailHeader.Foreground = $window.Resources['TextPrimary']
-        $txtStatusMsg.Foreground = $window.Resources['StatusBarFg']
-        $tabMapping.Foreground = $window.Resources['TextPrimary']
-        $tabReview.Foreground = $window.Resources['TextPrimary']
+        & $setBrush 'txtAppTitle' 'Foreground' 'TextPrimary'
+        & $setBrush 'lblBasePath' 'Foreground' 'TextSecondary'
+        & $setBrush 'lblBaseSheet' 'Foreground' 'TextSecondary'
+        & $setBrush 'lblIncomingPath' 'Foreground' 'TextSecondary'
+        & $setBrush 'lblIncomingSheet' 'Foreground' 'TextSecondary'
+        & $setBrush 'lblLanguage' 'Foreground' 'TextSecondary'
+        & $setBrush 'lblJoinKeyTitle' 'Foreground' 'TextPrimary'
+        & $setBrush 'lblJoinBaseSub' 'Foreground' 'TextSecondary'
+        & $setBrush 'lblJoinIncomingSub' 'Foreground' 'TextSecondary'
+        & $setBrush 'txtCounters' 'Foreground' 'TextPrimary'
+        & $setBrush 'txtDetailHeader' 'Foreground' 'TextPrimary'
+        & $setBrush 'txtStatusMsg' 'Foreground' 'StatusBarFg'
+        & $setBrush 'tabMapping' 'Foreground' 'TextPrimary'
+        & $setBrush 'tabReview' 'Foreground' 'TextPrimary'
+
+        # Comparison mode controls
+        & $setBrush 'lblCompareOptionsTitle' 'Foreground' 'TextSecondary'
+        & $setBrush 'chkIgnoreCase' 'Foreground' 'TextPrimary'
+        & $setBrush 'chkTrimWhitespace' 'Foreground' 'TextPrimary'
+        & $setBrush 'chkIgnoreSpecialChars' 'Foreground' 'TextPrimary'
+        & $setBrush 'chkIgnoreAllSpaces' 'Foreground' 'TextPrimary'
 
         # Inputs and pickers
-        $txtBasePath.Background = $window.Resources['BgInput']
-        $txtBasePath.Foreground = $window.Resources['TextPrimary']
-        $txtBasePath.BorderBrush = $window.Resources['BorderInput']
+        & $setBrush 'txtBasePath' 'Background' 'BgInput'
+        & $setBrush 'txtBasePath' 'Foreground' 'TextPrimary'
+        & $setBrush 'txtBasePath' 'BorderBrush' 'BorderInput'
 
-        $txtIncomingPath.Background = $window.Resources['BgInput']
-        $txtIncomingPath.Foreground = $window.Resources['TextPrimary']
-        $txtIncomingPath.BorderBrush = $window.Resources['BorderInput']
+        & $setBrush 'txtIncomingPath' 'Background' 'BgInput'
+        & $setBrush 'txtIncomingPath' 'Foreground' 'TextPrimary'
+        & $setBrush 'txtIncomingPath' 'BorderBrush' 'BorderInput'
 
-        $txtSearchReview.Background = $window.Resources['BgInput']
-        $txtSearchReview.Foreground = $window.Resources['TextPrimary']
-        $txtSearchReview.BorderBrush = $window.Resources['BorderInput']
+        & $setBrush 'txtSearchReview' 'Background' 'BgInput'
+        & $setBrush 'txtSearchReview' 'Foreground' 'TextPrimary'
+        & $setBrush 'txtSearchReview' 'BorderBrush' 'BorderInput'
 
-        if ($txtSearchMapping) {
-            $txtSearchMapping.Foreground = $window.Resources['TextPrimary']
+        & $setBrush 'txtSearchMapping' 'Foreground' 'TextPrimary'
+
+        & $setBrush 'cmbBaseSheet' 'Background' 'BgInput'
+        & $setBrush 'cmbBaseSheet' 'Foreground' 'TextPrimary'
+
+        & $setBrush 'cmbIncomingSheet' 'Background' 'BgInput'
+        & $setBrush 'cmbIncomingSheet' 'Foreground' 'TextPrimary'
+
+        & $setBrush 'cmbLanguage' 'Background' 'BgInput'
+        & $setBrush 'cmbLanguage' 'Foreground' 'TextPrimary'
+
+        & $setBrush 'cmbFilterStatus' 'Background' 'BgInput'
+        & $setBrush 'cmbFilterStatus' 'Foreground' 'TextPrimary'
+
+        & $setBrush 'lbJoinBase' 'Background' 'BgInput'
+        & $setBrush 'lbJoinBase' 'Foreground' 'TextPrimary'
+        & $setBrush 'lbJoinBase' 'BorderBrush' 'BorderInput'
+
+        & $setBrush 'lbJoinIncoming' 'Background' 'BgInput'
+        & $setBrush 'lbJoinIncoming' 'Foreground' 'TextPrimary'
+        & $setBrush 'lbJoinIncoming' 'BorderBrush' 'BorderInput'
+
+        $gridMapRules = $w.FindName('gridMappingRules')
+        if ($gridMapRules) {
+            $gridMapRules.Background = $w.Resources['BgInput']
+            $gridMapRules.Foreground = $w.Resources['TextPrimary']
+            $gridMapRules.BorderBrush = $w.Resources['BorderCard']
+            $gridMapRules.RowBackground = $w.Resources['DataGridRowBg']
+            $gridMapRules.AlternatingRowBackground = $w.Resources['DataGridAltRowBg']
+            $gridMapRules.HorizontalGridLinesBrush = $w.Resources['GridLines']
         }
 
-        $cmbBaseSheet.Background = $window.Resources['BgInput']
-        $cmbBaseSheet.Foreground = $window.Resources['TextPrimary']
-
-        $cmbIncomingSheet.Background = $window.Resources['BgInput']
-        $cmbIncomingSheet.Foreground = $window.Resources['TextPrimary']
-
-        $cmbLanguage.Background = $window.Resources['BgInput']
-        $cmbLanguage.Foreground = $window.Resources['TextPrimary']
-
-        $cmbFilterStatus.Background = $window.Resources['BgInput']
-        $cmbFilterStatus.Foreground = $window.Resources['TextPrimary']
-
-        $lbJoinBase.Background = $window.Resources['BgInput']
-        $lbJoinBase.Foreground = $window.Resources['TextPrimary']
-        $lbJoinBase.BorderBrush = $window.Resources['BorderInput']
-
-        $lbJoinIncoming.Background = $window.Resources['BgInput']
-        $lbJoinIncoming.Foreground = $window.Resources['TextPrimary']
-        $lbJoinIncoming.BorderBrush = $window.Resources['BorderInput']
-
-        $gridMappingRules.Background = $window.Resources['BgInput']
-        $gridMappingRules.Foreground = $window.Resources['TextPrimary']
-        $gridMappingRules.BorderBrush = $window.Resources['BorderCard']
-        $gridMappingRules.RowBackground = $window.Resources['DataGridRowBg']
-        $gridMappingRules.AlternatingRowBackground = $window.Resources['DataGridAltRowBg']
-        $gridMappingRules.HorizontalGridLinesBrush = $window.Resources['GridLines']
-
-        foreach ($dg in @($dgBaseFullRow, $gridMappingResultPreview, $gridPrevIncomingRow, $gridPrevBaseRow)) {
+        foreach ($dgName in @('dgBaseFullRow', 'gridMappingResultPreview', 'gridPrevIncomingRow', 'gridPrevBaseRow')) {
+            $dg = $w.FindName($dgName)
             if ($dg) {
-                $dg.Background = $window.Resources['BgInput']
-                $dg.Foreground = $window.Resources['TextPrimary']
-                $dg.BorderBrush = $window.Resources['BorderCard']
-                $dg.RowBackground = $window.Resources['DataGridRowBg']
-                $dg.AlternatingRowBackground = $window.Resources['DataGridAltRowBg']
-                $dg.HorizontalGridLinesBrush = $window.Resources['GridLines']
-                $dg.VerticalGridLinesBrush = $window.Resources['GridLines']
+                $dg.Background = $w.Resources['BgInput']
+                $dg.Foreground = $w.Resources['TextPrimary']
+                $dg.BorderBrush = $w.Resources['BorderCard']
+                $dg.RowBackground = $w.Resources['DataGridRowBg']
+                $dg.AlternatingRowBackground = $w.Resources['DataGridAltRowBg']
+                $dg.HorizontalGridLinesBrush = $w.Resources['GridLines']
+                $dg.VerticalGridLinesBrush = $w.Resources['GridLines']
             }
         }
 
-        $lbReviewItems.Background = $window.Resources['BgCard']
-        $lbReviewItems.BorderBrush = $window.Resources['BorderCard']
+        & $setBrush 'lbReviewItems' 'Background' 'BgCard'
+        & $setBrush 'lbReviewItems' 'BorderBrush' 'BorderCard'
 
         # Secondary action buttons
-        $secButtons = @(
-            $btnBrowseBase, $btnBrowseIncoming, $btnThemeToggle, $btnSettings,
-            $btnRestoreBackup, $btnOpenBackups, $btnOpenLogs, $btnHelp,
-            $btnAddRule, $btnEditRule, $btnRemoveRule, $btnSaveProfile,
-            $btnRefreshPreview, $btnPrevSampleRow, $btnNextSampleRow,
-            $btnBackRow, $btnSkipRow, $btnExportReport, $btnUndo
+        $secBtnNames = @(
+            'btnBrowseBase', 'btnBrowseIncoming', 'btnThemeToggle', 'btnSettings',
+            'btnRestoreBackup', 'btnOpenBackups', 'btnOpenLogs', 'btnHelp',
+            'btnAddRule', 'btnEditRule', 'btnRemoveRule', 'btnSaveProfile',
+            'btnRefreshPreview', 'btnPrevSampleRow', 'btnNextSampleRow',
+            'btnBackRow', 'btnSkipRow', 'btnExportReport', 'btnUndo'
         )
-        foreach ($b in $secButtons) {
+        foreach ($bn in $secBtnNames) {
+            $b = $w.FindName($bn)
             if ($b) {
-                $b.Background = $window.Resources['BtnSecondaryBg']
-                $b.Foreground = $window.Resources['BtnSecondaryFg']
-                $b.BorderBrush = $window.Resources['BorderCard']
+                $b.Background = $w.Resources['BtnSecondaryBg']
+                $b.Foreground = $w.Resources['BtnSecondaryFg']
+                $b.BorderBrush = $w.Resources['BorderCard']
                 $b.BorderThickness = [System.Windows.Thickness]::new(1)
             }
         }
 
         # Update button text & DWM title bar chrome
-        $btnThemeToggle.Content = if ($isDark) { Get-UiString 'BtnThemeDark' } else { Get-UiString 'BtnThemeLight' }
-        Set-WindowDwmTheme -Hwnd $hwnd -IsDark $isDark
+        $bTheme = $w.FindName('btnThemeToggle')
+        if ($bTheme) {
+            $bTheme.Content = if ($isDark) { Get-UiString 'BtnThemeDark' } else { Get-UiString 'BtnThemeLight' }
+        }
+        try {
+            $hw = (New-Object System.Windows.Interop.WindowInteropHelper($w)).Handle
+            if ($hw -and $hw -ne [IntPtr]::Zero) {
+                Set-WindowDwmTheme -Hwnd $hw -IsDark $isDark
+            }
+        } catch {}
 
         # Refresh review item badges to active theme
-        if ($script:AllReviewItems) {
+        $lbRev = $w.FindName('lbReviewItems')
+        if ($script:AllReviewItems -and $lbRev) {
             foreach ($item in $script:AllReviewItems) {
                 $stat = if ($item.Decision -and $item.Decision -ne 'Pending') { $item.Decision } else { $item.Record.Status }
                 $bColors = Get-StatusBadgeColors -Status $stat -ThemeName $ThemeName
                 $item.StatusBg = $bColors.Bg
                 $item.StatusFg = $bColors.Fg
             }
-            $lbReviewItems.Items.Refresh()
+            $lbRev.Items.Refresh()
         }
 
         # Refresh preview card badges to active theme
@@ -4972,8 +5311,8 @@ function Show-MasterUpdater {
         }
 
         # Re-render detail pane if an item is selected
-        if ($RenderDetailPane -and $lbReviewItems.SelectedItem) {
-            & $RenderDetailPane $lbReviewItems.SelectedItem
+        if ($RenderDetailPane -and $lbRev -and $lbRev.SelectedItem) {
+            & $RenderDetailPane $lbRev.SelectedItem
         }
 
         if ($UpdateKpiPillSelection) {
@@ -4981,6 +5320,48 @@ function Show-MasterUpdater {
         }
     }
     $script:ApplyTheme = $ApplyTheme
+
+    # Helper: Update Staging Summary
+    $UpdateStagingSummary = {
+        $lblStaging = if ($txtStagingSummary) { $txtStagingSummary } elseif ($script:txtStagingSummary) { $script:txtStagingSummary } else { $null }
+        if (-not $lblStaging) { return }
+        if (-not $script:AllReviewItems -or $script:AllReviewItems.Count -eq 0) {
+            $lblStaging.Text = ''
+            return
+        }
+        $acceptedItems = @($script:AllReviewItems | Where-Object { $_.Decision -eq 'Accepted' })
+        $stagedChanges = 0
+        $skippedChanges = 0
+        $affectedRows = 0
+
+        foreach ($item in $acceptedItems) {
+            $rec = $item.Record
+            $hasStagedInRow = $false
+            if ($rec.Changes -and $rec.Changes.Count -gt 0) {
+                foreach ($chg in $rec.Changes) {
+                    $isSelected = if ($item.SelectedCells) { ($item.SelectedCells[$chg.BaseColumn] -ne $false) } else { $true }
+                    if ($isSelected) {
+                        $stagedChanges++
+                        $hasStagedInRow = $true
+                    } else {
+                        $skippedChanges++
+                    }
+                }
+            } elseif ($rec.Status -eq 'New') {
+                $stagedChanges++
+                $hasStagedInRow = $true
+            }
+            if ($hasStagedInRow) { $affectedRows++ }
+        }
+
+        $fmt = Get-UiString 'StagingSummaryFormat' 'Wybrano do zapisu: {0} zmian w {1} wierszach (pominięto: {2})'
+        $lblStaging.Text = $fmt -f $stagedChanges, $affectedRows, $skippedChanges
+
+        $hasAccepted = $acceptedItems.Count -gt 0
+        if ($btnApplyAccepted) { $btnApplyAccepted.IsEnabled = $hasAccepted }
+        if ($btnApplyToNewFile) { $btnApplyToNewFile.IsEnabled = $hasAccepted }
+    }
+    $script:UpdateStagingSummary = $UpdateStagingSummary
 
     # Helper: Update Counters
     $UpdateCounters = {
@@ -4994,6 +5375,7 @@ function Show-MasterUpdater {
             if ($txtKpiCountAccepted)  { $txtKpiCountAccepted.Text = "0" }
             if ($txtKpiCountSkipped)   { $txtKpiCountSkipped.Text = "0" }
             if ($btnUndo)              { $btnUndo.IsEnabled = ($script:UndoStack.Count -gt 0) }
+            & $UpdateStagingSummary
             return
         }
         $total = $script:AllReviewItems.Count
@@ -5012,130 +5394,167 @@ function Show-MasterUpdater {
         if ($txtKpiCountAccepted)  { $txtKpiCountAccepted.Text = "$cAcc" }
         if ($txtKpiCountSkipped)   { $txtKpiCountSkipped.Text = "$($cSkip + $cRej)" }
         if ($btnUndo)              { $btnUndo.IsEnabled = ($script:UndoStack.Count -gt 0) }
+        & $UpdateStagingSummary
     }
     $script:UpdateCounters = $UpdateCounters
 
     # Helper: Dynamic Localization
     $UpdateLocalization = {
-        $window.Title               = Get-UiString 'AppTitle'
-                $txtAppTitle.Text           = Get-UiString 'AppTitle'
-        if ($txtAppSubtitle)         { $txtAppSubtitle.Text = Get-UiString 'AppSubtitle' }
-        $lblBasePath.Text           = Get-UiString 'LblBasePath'
-        $lblBaseSheet.Text          = Get-UiString 'LblSheet'
-        $btnBrowseBase.Content      = Get-UiString 'BtnBrowseBase'
-        $lblIncomingPath.Text       = Get-UiString 'LblIncomingPath'
-        $lblIncomingSheet.Text      = Get-UiString 'LblSheet'
-        $btnBrowseIncoming.Content  = Get-UiString 'BtnBrowseIncoming'
-        $lblLanguage.Text           = Get-UiString 'LblLanguage'
-        $btnSettings.Content        = Get-UiString 'BtnSettings'
-        $btnRestoreBackup.Content   = Get-UiString 'BtnRestoreBackup'
-        if ($btnOpenBackups)        { $btnOpenBackups.Content = Get-UiString 'BtnOpenBackups'; $btnOpenBackups.ToolTip = Get-UiString 'TooltipOpenBackups' }
-        if ($btnOpenLogs)           { $btnOpenLogs.Content = Get-UiString 'BtnOpenLogs'; $btnOpenLogs.ToolTip = Get-UiString 'TooltipOpenLogs' }
-        if ($btnHelp)               { $btnHelp.Content = Get-UiString 'BtnHelp'; $btnHelp.ToolTip = Get-UiString 'TooltipHelp' }
-        $tabMapping.Header          = Get-UiString 'TabMapping'
-        $btnAutoMap.Content         = Get-UiString 'BtnAutoMap'
-        $btnAddRule.Content         = Get-UiString 'BtnAddRule'
-        if ($btnEditRule)           { $btnEditRule.Content = Get-UiString 'BtnEditRule' }
-        $btnRemoveRule.Content      = Get-UiString 'BtnRemoveRule'
-        $btnSaveProfile.Content     = Get-UiString 'BtnSaveProfile'
-        $colBase.Header             = Get-UiString 'ColBase'
-        $colIncoming.Header         = Get-UiString 'ColIncoming'
-        $colMergeMode.Header        = Get-UiString 'ColMergeMode'
-        $colSeparator.Header        = Get-UiString 'ColSeparator'
-                $lblJoinKeyTitle.Text       = Get-UiString 'LblJoinKeyTitle'
-        if ($lblJoinKeyHint)         { $lblJoinKeyHint.Text = Get-UiString 'LblJoinKeyHint' }
-        $lblJoinBaseSub.Text        = Get-UiString 'LblJoinBase'
-        $lblJoinIncomingSub.Text    = Get-UiString 'LblJoinIncoming'
-        $btnRunCompare.Content      = Get-UiString 'BtnRunCompare'
-        $tabReview.Header           = Get-UiString 'TabReview'
-        $cbiFilterAll.Content       = Get-UiString 'FilterAll'
-        $cbiFilterNew.Content       = Get-UiString 'FilterNew'
-        $cbiFilterChanged.Content   = Get-UiString 'FilterChanged'
-        $cbiFilterRemoved.Content   = Get-UiString 'FilterRemoved'
-        $cbiFilterAmbiguous.Content = Get-UiString 'FilterAmbiguous'
-        if ($cbiFilterUnchanged)    { $cbiFilterUnchanged.Content = Get-UiString 'FilterUnchanged' }
-        $cbiFilterAccepted.Content  = Get-UiString 'FilterAccepted'
-        $cbiFilterSkipped.Content   = Get-UiString 'FilterSkipped'
-        $cbiFilterRejected.Content  = Get-UiString 'FilterRejected'
-        if ($chkShowUnchanged) {
-            $chkShowUnchanged.Content = Get-UiString 'LblShowUnchanged'
-            $chkShowUnchanged.ToolTip = Get-UiString 'TooltipShowUnchanged'
+        $w = if ($window) { $window } else { $script:window }
+        if (-not $w) { return }
+        $w.Title = Get-UiString 'AppTitle'
+
+        $setProp = {
+            param($name, $prop, $val)
+            $ctrl = $w.FindName($name)
+            if ($ctrl -and $null -ne $val) { $ctrl.$prop = $val }
         }
-        $btnBackRow.Content         = Get-UiString 'BtnBack'
-        $btnAcceptRow.Content       = Get-UiString 'BtnAccept'
-        $btnRejectRow.Content       = Get-UiString 'BtnReject'
-        $btnSkipRow.Content         = Get-UiString 'BtnSkip'
-        $btnEditRow.Content         = Get-UiString 'BtnEdit'
-        if ($btnUndo)               { $btnUndo.Content = Get-UiString 'BtnUndo' }
-        if ($lblKpiAll)             { $lblKpiAll.Text = Get-UiString 'KpiAll' }
-        if ($lblKpiNew)             { $lblKpiNew.Text = Get-UiString 'KpiNew' }
-        if ($lblKpiChanged)         { $lblKpiChanged.Text = Get-UiString 'KpiChanged' }
-        if ($lblKpiAmbiguous)       { $lblKpiAmbiguous.Text = Get-UiString 'KpiAmbiguous' }
-        if ($lblKpiAccepted)        { $lblKpiAccepted.Text = Get-UiString 'KpiAccepted' }
-        if ($lblKpiSkipped)         { $lblKpiSkipped.Text = Get-UiString 'KpiSkipped' }
-        if ($txtBasePath)           { $txtBasePath.ToolTip = Get-UiString 'TooltipDropBase' }
-        if ($txtIncomingPath)       { $txtIncomingPath.ToolTip = Get-UiString 'TooltipDropIncoming' }
-        if ($cardBaseFile)          { $cardBaseFile.ToolTip = Get-UiString 'TooltipDropBase' }
-        if ($cardIncomingFile)      { $cardIncomingFile.ToolTip = Get-UiString 'TooltipDropIncoming' }
-        if ($txtSearchReview)       { $txtSearchReview.ToolTip = Get-UiString 'TooltipSearchReview' }
-        if ($btnSearchClear)        { $btnSearchClear.ToolTip = Get-UiString 'TooltipBtnSearchClear' }
-        if ($txtSearchMapping)      { $txtSearchMapping.ToolTip = Get-UiString 'TooltipSearchMapping' }
-        if ($btnSearchMappingClear) { $btnSearchMappingClear.ToolTip = Get-UiString 'TooltipBtnSearchClear' }
-        if ($btnThemeToggle)        { $btnThemeToggle.ToolTip = Get-UiString 'TooltipThemeToggle' }
-        if ($btnSettings)           { $btnSettings.ToolTip = Get-UiString 'TooltipSettings' }
-        if ($btnRestoreBackup)      { $btnRestoreBackup.ToolTip = Get-UiString 'TooltipRestoreBackup' }
-        if ($btnBrowseBase)         { $btnBrowseBase.ToolTip = Get-UiString 'TooltipBrowseBase' }
-        if ($btnBrowseIncoming)     { $btnBrowseIncoming.ToolTip = Get-UiString 'TooltipBrowseIncoming' }
-        if ($cmbBaseSheet)          { $cmbBaseSheet.ToolTip = Get-UiString 'TooltipCmbBaseSheet' }
-        if ($cmbIncomingSheet)      { $cmbIncomingSheet.ToolTip = Get-UiString 'TooltipCmbIncomingSheet' }
-        if ($btnAutoMap)            { $btnAutoMap.ToolTip = Get-UiString 'TooltipAutoMap' }
-        if ($btnAddRule)            { $btnAddRule.ToolTip = Get-UiString 'TooltipAddRule' }
-        if ($btnEditRule)           { $btnEditRule.ToolTip = Get-UiString 'TooltipEditRule' }
-        if ($btnRemoveRule)         { $btnRemoveRule.ToolTip = Get-UiString 'TooltipRemoveRule' }
-        if ($btnSaveProfile)        { $btnSaveProfile.ToolTip = Get-UiString 'TooltipSaveProfile' }
-        if ($lbJoinBase)            { $lbJoinBase.ToolTip = Get-UiString 'TooltipJoinBase' }
-        if ($lbJoinIncoming)        { $lbJoinIncoming.ToolTip = Get-UiString 'TooltipJoinIncoming' }
-        if ($btnRunCompare)         { $btnRunCompare.ToolTip = Get-UiString 'TooltipRunCompare' }
-        if ($cmbFilterStatus)       { $cmbFilterStatus.ToolTip = Get-UiString 'TooltipFilterStatus' }
-        if ($btnBackRow)            { $btnBackRow.ToolTip = Get-UiString 'TooltipBtnBack' }
-        if ($btnAcceptRow)          { $btnAcceptRow.ToolTip = Get-UiString 'TooltipBtnAccept' }
-        if ($btnRejectRow)          { $btnRejectRow.ToolTip = Get-UiString 'TooltipBtnReject' }
-        if ($btnSkipRow)            { $btnSkipRow.ToolTip = Get-UiString 'TooltipBtnSkip' }
-        if ($btnEditRow)            { $btnEditRow.ToolTip = Get-UiString 'TooltipBtnEdit' }
-        if ($btnUndo)               { $btnUndo.ToolTip = Get-UiString 'TooltipBtnUndo' }
-        if ($btnAcceptAll)          { $btnAcceptAll.ToolTip = Get-UiString 'TooltipBtnAcceptAll' }
-        if ($btnRejectAll)          { $btnRejectAll.ToolTip = Get-UiString 'TooltipBtnRejectAll' }
-        if ($btnExportReport)       { $btnExportReport.ToolTip = Get-UiString 'TooltipBtnExportReport' }
-        if ($btnApplyAccepted)      { $btnApplyAccepted.ToolTip = Get-UiString 'TooltipBtnApplyAccepted' }
-        if ($btnModifyBaseField)    { $btnModifyBaseField.ToolTip = Get-UiString 'TooltipBtnModifyBaseField' }
-        if ($cmbLanguage)           { $cmbLanguage.ToolTip = Get-UiString 'TooltipCmbLanguage' }
-        $btnAcceptAll.Content       = Get-UiString 'BtnAcceptAll'
-        $btnRejectAll.Content       = Get-UiString 'BtnRejectAll'
-        $btnExportReport.Content    = Get-UiString 'BtnExportReport'
-        $btnApplyAccepted.Content   = Get-UiString 'BtnApplyAccepted'
-        if ($txtBaseRowHint)        { $txtBaseRowHint.Text = Get-UiString 'BaseRowHint' }
-        if ($btnModifyBaseField)    { $btnModifyBaseField.Content = Get-UiString 'BtnModifyBaseField' }
 
-        if ($txtPreviewHeader)      { $txtPreviewHeader.Text = Get-UiString 'PreviewCardTitle' }
-        if ($txtPreviewHint)        { $txtPreviewHint.Text = Get-UiString 'PreviewCardHint' }
-        if ($tabPrevResult)         { $tabPrevResult.Header = Get-UiString 'TabPrevResult' }
-        if ($tabPrevIncoming)       { $tabPrevIncoming.Header = Get-UiString 'TabPrevIncoming' }
-        if ($tabPrevBase)           { $tabPrevBase.Header = Get-UiString 'TabPrevBase' }
-        if ($btnRefreshPreview)     { $btnRefreshPreview.Content = Get-UiString 'BtnRefreshPreview' }
-        if ($btnPrevSampleRow)      { $btnPrevSampleRow.Content = Get-UiString 'BtnPrevSampleRow' }
-        if ($btnNextSampleRow)      { $btnNextSampleRow.Content = Get-UiString 'BtnNextSampleRow' }
-        if ($colPrevTargetBase)     { $colPrevTargetBase.Header = Get-UiString 'ColPrevTargetBase' }
-        if ($colPrevSourceExpr)     { $colPrevSourceExpr.Header = Get-UiString 'ColPrevSourceExpr' }
-        if ($colPrevProjectedVal)   { $colPrevProjectedVal.Header = Get-UiString 'ColPrevProjectedVal' }
-        if ($colPrevCurrentBaseVal) { $colPrevCurrentBaseVal.Header = Get-UiString 'ColPrevCurrentBaseVal' }
-        if ($colPrevStatus)         { $colPrevStatus.Header = Get-UiString 'ColPrevStatus' }
-        if ($txtEmptyPreviewPrompt) { $txtEmptyPreviewPrompt.Text = Get-UiString 'PreviewLoadFilesPrompt' }
+        & $setProp 'txtAppTitle' 'Text' (Get-UiString 'AppTitle')
+        & $setProp 'txtAppSubtitle' 'Text' (Get-UiString 'AppSubtitle')
+        & $setProp 'lblBasePath' 'Text' (Get-UiString 'LblBasePath')
+        & $setProp 'lblBaseSheet' 'Text' (Get-UiString 'LblSheet')
+        & $setProp 'btnBrowseBase' 'Content' (Get-UiString 'BtnBrowseBase')
+        & $setProp 'lblIncomingPath' 'Text' (Get-UiString 'LblIncomingPath')
+        & $setProp 'lblIncomingSheet' 'Text' (Get-UiString 'LblSheet')
+        & $setProp 'btnBrowseIncoming' 'Content' (Get-UiString 'BtnBrowseIncoming')
+        & $setProp 'lblLanguage' 'Text' (Get-UiString 'LblLanguage')
+        & $setProp 'btnSettings' 'Content' (Get-UiString 'BtnSettings')
+        & $setProp 'btnRestoreBackup' 'Content' (Get-UiString 'BtnRestoreBackup')
+        & $setProp 'btnOpenBackups' 'Content' (Get-UiString 'BtnOpenBackups')
+        & $setProp 'btnOpenBackups' 'ToolTip' (Get-UiString 'TooltipOpenBackups')
+        & $setProp 'btnOpenLogs' 'Content' (Get-UiString 'BtnOpenLogs')
+        & $setProp 'btnOpenLogs' 'ToolTip' (Get-UiString 'TooltipOpenLogs')
+        & $setProp 'btnHelp' 'Content' (Get-UiString 'BtnHelp')
+        & $setProp 'btnHelp' 'ToolTip' (Get-UiString 'TooltipHelp')
+        & $setProp 'tabMapping' 'Header' (Get-UiString 'TabMapping')
+        & $setProp 'btnAutoMap' 'Content' (Get-UiString 'BtnAutoMap')
+        & $setProp 'btnAddRule' 'Content' (Get-UiString 'BtnAddRule')
+        & $setProp 'btnEditRule' 'Content' (Get-UiString 'BtnEditRule')
+        & $setProp 'btnRemoveRule' 'Content' (Get-UiString 'BtnRemoveRule')
+        & $setProp 'btnSaveProfile' 'Content' (Get-UiString 'BtnSaveProfile')
+        & $setProp 'colBase' 'Header' (Get-UiString 'ColBase')
+        & $setProp 'colIncoming' 'Header' (Get-UiString 'ColIncoming')
+        & $setProp 'colMergeMode' 'Header' (Get-UiString 'ColMergeMode')
+        & $setProp 'colSeparator' 'Header' (Get-UiString 'ColSeparator')
+        & $setProp 'colDiffPolicy' 'Header' (Get-UiString 'ColDiffPolicy')
+        & $setProp 'lblJoinKeyTitle' 'Text' (Get-UiString 'LblJoinKeyTitle')
+        & $setProp 'lblJoinKeyHint' 'Text' (Get-UiString 'LblJoinKeyHint')
+        & $setProp 'lblJoinBaseSub' 'Text' (Get-UiString 'LblJoinBase')
+        & $setProp 'lblJoinIncomingSub' 'Text' (Get-UiString 'LblJoinIncoming')
+        & $setProp 'lblCompareOptionsTitle' 'Text' (Get-UiString 'LblCompareOptionsTitle')
+        & $setProp 'chkIgnoreCase' 'Content' (Get-UiString 'LblIgnoreCase')
+        & $setProp 'chkIgnoreCase' 'ToolTip' (Get-UiString 'TooltipIgnoreCase')
+        & $setProp 'chkTrimWhitespace' 'Content' (Get-UiString 'LblTrimWhitespace')
+        & $setProp 'chkTrimWhitespace' 'ToolTip' (Get-UiString 'TooltipTrimWhitespace')
+        & $setProp 'chkIgnoreSpecialChars' 'Content' (Get-UiString 'LblIgnoreSpecialChars')
+        & $setProp 'chkIgnoreSpecialChars' 'ToolTip' (Get-UiString 'TooltipIgnoreSpecialChars')
+        & $setProp 'chkIgnoreAllSpaces' 'Content' (Get-UiString 'LblIgnoreAllSpaces')
+        & $setProp 'chkIgnoreAllSpaces' 'ToolTip' (Get-UiString 'TooltipIgnoreAllSpaces')
+        & $setProp 'btnRunCompare' 'Content' (Get-UiString 'BtnRunCompare')
+        & $setProp 'tabReview' 'Header' (Get-UiString 'TabReview')
+        & $setProp 'cbiFilterAll' 'Content' (Get-UiString 'FilterAll')
+        & $setProp 'cbiFilterNew' 'Content' (Get-UiString 'FilterNew')
+        & $setProp 'cbiFilterChanged' 'Content' (Get-UiString 'FilterChanged')
+        & $setProp 'cbiFilterRemoved' 'Content' (Get-UiString 'FilterRemoved')
+        & $setProp 'cbiFilterAmbiguous' 'Content' (Get-UiString 'FilterAmbiguous')
+        & $setProp 'cbiFilterUnchanged' 'Content' (Get-UiString 'FilterUnchanged')
+        & $setProp 'cbiFilterAccepted' 'Content' (Get-UiString 'FilterAccepted')
+        & $setProp 'cbiFilterSkipped' 'Content' (Get-UiString 'FilterSkipped')
+        & $setProp 'cbiFilterRejected' 'Content' (Get-UiString 'FilterRejected')
+        & $setProp 'chkShowUnchanged' 'Content' (Get-UiString 'LblShowUnchanged')
+        & $setProp 'chkShowUnchanged' 'ToolTip' (Get-UiString 'TooltipShowUnchanged')
+        & $setProp 'btnBackRow' 'Content' (Get-UiString 'BtnBack')
+        & $setProp 'btnAcceptRow' 'Content' (Get-UiString 'BtnAccept')
+        & $setProp 'btnRejectRow' 'Content' (Get-UiString 'BtnReject')
+        & $setProp 'btnSkipRow' 'Content' (Get-UiString 'BtnSkip')
+        & $setProp 'btnEditRow' 'Content' (Get-UiString 'BtnEdit')
+        & $setProp 'btnUndo' 'Content' (Get-UiString 'BtnUndo')
+        & $setProp 'lblKpiAll' 'Text' (Get-UiString 'KpiAll')
+        & $setProp 'lblKpiNew' 'Text' (Get-UiString 'KpiNew')
+        & $setProp 'lblKpiChanged' 'Text' (Get-UiString 'KpiChanged')
+        & $setProp 'lblKpiAmbiguous' 'Text' (Get-UiString 'KpiAmbiguous')
+        & $setProp 'lblKpiAccepted' 'Text' (Get-UiString 'KpiAccepted')
+        & $setProp 'lblKpiSkipped' 'Text' (Get-UiString 'KpiSkipped')
+        & $setProp 'txtBasePath' 'ToolTip' (Get-UiString 'TooltipDropBase')
+        & $setProp 'txtIncomingPath' 'ToolTip' (Get-UiString 'TooltipDropIncoming')
+        & $setProp 'cardBaseFile' 'ToolTip' (Get-UiString 'TooltipDropBase')
+        & $setProp 'cardIncomingFile' 'ToolTip' (Get-UiString 'TooltipDropIncoming')
+        & $setProp 'txtSearchReview' 'ToolTip' (Get-UiString 'TooltipSearchReview')
+        & $setProp 'btnSearchClear' 'ToolTip' (Get-UiString 'TooltipBtnSearchClear')
+        & $setProp 'txtSearchMapping' 'ToolTip' (Get-UiString 'TooltipSearchMapping')
+        & $setProp 'btnSearchMappingClear' 'ToolTip' (Get-UiString 'TooltipBtnSearchClear')
+        & $setProp 'btnThemeToggle' 'ToolTip' (Get-UiString 'TooltipThemeToggle')
+        & $setProp 'btnSettings' 'ToolTip' (Get-UiString 'TooltipSettings')
+        & $setProp 'btnRestoreBackup' 'ToolTip' (Get-UiString 'TooltipRestoreBackup')
+        & $setProp 'btnBrowseBase' 'ToolTip' (Get-UiString 'TooltipBrowseBase')
+        & $setProp 'btnBrowseIncoming' 'ToolTip' (Get-UiString 'TooltipBrowseIncoming')
+        & $setProp 'cmbBaseSheet' 'ToolTip' (Get-UiString 'TooltipCmbBaseSheet')
+        & $setProp 'cmbIncomingSheet' 'ToolTip' (Get-UiString 'TooltipCmbIncomingSheet')
+        & $setProp 'btnAutoMap' 'ToolTip' (Get-UiString 'TooltipAutoMap')
+        & $setProp 'btnAddRule' 'ToolTip' (Get-UiString 'TooltipAddRule')
+        & $setProp 'btnEditRule' 'ToolTip' (Get-UiString 'TooltipEditRule')
+        & $setProp 'btnRemoveRule' 'ToolTip' (Get-UiString 'TooltipRemoveRule')
+        & $setProp 'btnSaveProfile' 'ToolTip' (Get-UiString 'TooltipSaveProfile')
+        & $setProp 'lbJoinBase' 'ToolTip' (Get-UiString 'TooltipJoinBase')
+        & $setProp 'lbJoinIncoming' 'ToolTip' (Get-UiString 'TooltipJoinIncoming')
+        & $setProp 'btnRunCompare' 'ToolTip' (Get-UiString 'TooltipRunCompare')
+        & $setProp 'lblBatchColToggles' 'Text' (Get-UiString 'LblBatchColumnToggles')
 
-        & $ApplyTheme $script:CurrentTheme
-        & $UpdateCounters
+        if ($script:MappingRules) {
+            foreach ($r in $script:MappingRules) {
+                if ($r.PSObject.Properties['DiffPolicy']) {
+                    $r.DiffPolicyDisplay = Get-DiffPolicyDisplay $r.DiffPolicy
+                }
+            }
+            if ($gridMappingRules) { $gridMappingRules.Items.Refresh() }
+        }
+        & $UpdateStagingSummary
+        & $setProp 'cmbFilterStatus' 'ToolTip' (Get-UiString 'TooltipFilterStatus')
+        & $setProp 'btnBackRow' 'ToolTip' (Get-UiString 'TooltipBtnBack')
+        & $setProp 'btnAcceptRow' 'ToolTip' (Get-UiString 'TooltipBtnAccept')
+        & $setProp 'btnRejectRow' 'ToolTip' (Get-UiString 'TooltipBtnReject')
+        & $setProp 'btnSkipRow' 'ToolTip' (Get-UiString 'TooltipBtnSkip')
+        & $setProp 'btnEditRow' 'ToolTip' (Get-UiString 'TooltipBtnEdit')
+        & $setProp 'btnUndo' 'ToolTip' (Get-UiString 'TooltipBtnUndo')
+        & $setProp 'btnAcceptAll' 'ToolTip' (Get-UiString 'TooltipBtnAcceptAll')
+        & $setProp 'btnRejectAll' 'ToolTip' (Get-UiString 'TooltipBtnRejectAll')
+        & $setProp 'btnExportReport' 'ToolTip' (Get-UiString 'TooltipBtnExportReport')
+        & $setProp 'btnApplyAccepted' 'ToolTip' (Get-UiString 'TooltipBtnApplyAccepted')
+        & $setProp 'btnApplyToNewFile' 'ToolTip' (Get-UiString 'TooltipBtnApplyToNewFile')
+        & $setProp 'btnModifyBaseField' 'ToolTip' (Get-UiString 'TooltipBtnModifyBaseField')
+        & $setProp 'cmbLanguage' 'ToolTip' (Get-UiString 'TooltipCmbLanguage')
+        & $setProp 'btnAcceptAll' 'Content' (Get-UiString 'BtnAcceptAll')
+        & $setProp 'btnRejectAll' 'Content' (Get-UiString 'BtnRejectAll')
+        & $setProp 'btnExportReport' 'Content' (Get-UiString 'BtnExportReport')
+        & $setProp 'btnApplyAccepted' 'Content' (Get-UiString 'BtnApplyAccepted')
+        & $setProp 'btnApplyToNewFile' 'Content' (Get-UiString 'BtnApplyToNewFile')
+        & $setProp 'txtBaseRowHint' 'Text' (Get-UiString 'BaseRowHint')
+        & $setProp 'btnModifyBaseField' 'Content' (Get-UiString 'BtnModifyBaseField')
+        & $setProp 'txtPreviewHeader' 'Text' (Get-UiString 'PreviewCardTitle')
+        & $setProp 'txtPreviewHint' 'Text' (Get-UiString 'PreviewCardHint')
+        & $setProp 'tabPrevResult' 'Header' (Get-UiString 'TabPrevResult')
+        & $setProp 'tabPrevIncoming' 'Header' (Get-UiString 'TabPrevIncoming')
+        & $setProp 'tabPrevBase' 'Header' (Get-UiString 'TabPrevBase')
+        & $setProp 'btnRefreshPreview' 'Content' (Get-UiString 'BtnRefreshPreview')
+        & $setProp 'btnPrevSampleRow' 'Content' (Get-UiString 'BtnPrevSampleRow')
+        & $setProp 'btnNextSampleRow' 'Content' (Get-UiString 'BtnNextSampleRow')
+        & $setProp 'colPrevTargetBase' 'Header' (Get-UiString 'ColPrevTargetBase')
+        & $setProp 'colPrevSourceExpr' 'Header' (Get-UiString 'ColPrevSourceExpr')
+        & $setProp 'colPrevProjectedVal' 'Header' (Get-UiString 'ColPrevProjectedVal')
+        & $setProp 'colPrevCurrentBaseVal' 'Header' (Get-UiString 'ColPrevCurrentBaseVal')
+        & $setProp 'colPrevStatus' 'Header' (Get-UiString 'ColPrevStatus')
+        & $setProp 'txtEmptyPreviewPrompt' 'Text' (Get-UiString 'PreviewLoadFilesPrompt')
 
-        if (-not $lbReviewItems.SelectedItem) {
-            $txtDetailHeader.Text = Get-UiString 'SelectRowHeader'
+        if ($ApplyTheme) { & $ApplyTheme $script:CurrentTheme }
+        elseif ($script:ApplyTheme) { & $script:ApplyTheme $script:CurrentTheme }
+        if ($UpdateCounters) { & $UpdateCounters }
+        elseif ($script:UpdateCounters) { & $script:UpdateCounters }
+
+        $tDetail = $w.FindName('txtDetailHeader')
+        $lbRev = $w.FindName('lbReviewItems')
+        if ($tDetail -and $lbRev -and -not $lbRev.SelectedItem) {
+            $tDetail.Text = Get-UiString 'SelectRowHeader'
         }
     }
     $script:UpdateLocalization = $UpdateLocalization
@@ -5194,13 +5613,16 @@ function Show-MasterUpdater {
             foreach ($r in $prof.MappingRules) {
                 $bCols = @($r.BaseColumns)
                 $uCols = @($r.UpdateColumns)
+                $dp = if ($r.DiffPolicy) { $r.DiffPolicy } else { 'TrackChanges' }
                 $script:MappingRules.Add([PSCustomObject]@{
-                    BaseColumns   = $bCols
-                    UpdateColumns = $uCols
-                    MergeMode     = if ($r.MergeMode) { $r.MergeMode } else { 'Exact' }
-                    Separator     = if ($r.Separator) { $r.Separator } else { '' }
-                    BaseColsStr   = $bCols -join ', '
-                    UpdColsStr    = $uCols -join ', '
+                    BaseColumns       = $bCols
+                    UpdateColumns     = $uCols
+                    MergeMode         = if ($r.MergeMode) { $r.MergeMode } else { 'Exact' }
+                    Separator         = if ($r.Separator) { $r.Separator } else { '' }
+                    DiffPolicy        = $dp
+                    DiffPolicyDisplay = Get-DiffPolicyDisplay $dp
+                    BaseColsStr       = $bCols -join ', '
+                    UpdColsStr        = $uCols -join ', '
                 })
             }
 
@@ -5217,31 +5639,26 @@ function Show-MasterUpdater {
                     if ($lbJoinIncoming.Items.Contains($jk)) { [void]$lbJoinIncoming.SelectedItems.Add($jk) }
                 }
             }
+            if ($prof.CompareOptions) {
+                $co = $prof.CompareOptions
+                $coCase = if ($co -is [System.Collections.IDictionary]) { if ($co.Contains('IgnoreCase')) { [bool]$co['IgnoreCase'] } else { $null } } elseif ($co.PSObject.Properties['IgnoreCase']) { [bool]$co.IgnoreCase } else { $null }
+                $coTrim = if ($co -is [System.Collections.IDictionary]) { if ($co.Contains('Trim')) { [bool]$co['Trim'] } elseif ($co.Contains('TrimWhitespace')) { [bool]$co['TrimWhitespace'] } else { $null } } elseif ($co.PSObject.Properties['Trim']) { [bool]$co.Trim } elseif ($co.PSObject.Properties['TrimWhitespace']) { [bool]$co.TrimWhitespace } else { $null }
+                $coSpec = if ($co -is [System.Collections.IDictionary]) { if ($co.Contains('IgnoreSpecialChars')) { [bool]$co['IgnoreSpecialChars'] } else { $null } } elseif ($co.PSObject.Properties['IgnoreSpecialChars']) { [bool]$co.IgnoreSpecialChars } else { $null }
+                $coSpc  = if ($co -is [System.Collections.IDictionary]) { if ($co.Contains('IgnoreAllSpaces')) { [bool]$co['IgnoreAllSpaces'] } else { $null } } elseif ($co.PSObject.Properties['IgnoreAllSpaces']) { [bool]$co.IgnoreAllSpaces } else { $null }
+
+                if ($null -ne $coCase -and $script:chkIgnoreCase) { $script:chkIgnoreCase.IsChecked = $coCase }
+                if ($null -ne $coTrim -and $script:chkTrimWhitespace) { $script:chkTrimWhitespace.IsChecked = $coTrim }
+                if ($null -ne $coSpec -and $script:chkIgnoreSpecialChars) { $script:chkIgnoreSpecialChars.IsChecked = $coSpec }
+                if ($null -ne $coSpc -and $script:chkIgnoreAllSpaces) { $script:chkIgnoreAllSpaces.IsChecked = $coSpc }
+            }
             $txtStatusMsg.Text = (Get-UiString 'ProfileSavedMsg') -f $prof.Name
         } else {
             $badgeProfile.Visibility = [System.Windows.Visibility]::Collapsed
             # Fallback when no saved profile matches: auto-map columns and select shared join key
             if ($script:BaseHeaders -and $script:IncomingHeaders -and $script:MappingRules.Count -eq 0) {
-                foreach ($ih in $script:IncomingHeaders) {
-                    $normIh = $ih.Trim().ToLowerInvariant() -replace '[_\-\s]+', ''
-                    $matched = $null
-                    foreach ($bh in $script:BaseHeaders) {
-                        $normBh = $bh.Trim().ToLowerInvariant() -replace '[_\-\s]+', ''
-                        if ($normBh -eq $normIh -or $normBh.Contains($normIh) -or $normIh.Contains($normBh)) {
-                            $matched = $bh
-                            break
-                        }
-                    }
-                    if ($matched) {
-                        $script:MappingRules.Add([PSCustomObject]@{
-                            BaseColumns   = @($matched)
-                            UpdateColumns = @($ih)
-                            MergeMode     = 'Exact'
-                            Separator     = ''
-                            BaseColsStr   = $matched
-                            UpdColsStr    = $ih
-                        })
-                    }
+                $autoRules = Invoke-AutoMapRules -BaseHeaders $script:BaseHeaders -IncomingHeaders $script:IncomingHeaders
+                foreach ($r in $autoRules) {
+                    $script:MappingRules.Add($r)
                 }
                 $lbJoinBase.SelectedItems.Clear()
                 $lbJoinIncoming.SelectedItems.Clear()
@@ -5443,7 +5860,8 @@ function Show-MasterUpdater {
                 }
             }
 
-            $projected = Get-ProjectedRow -IncomingValues $incHash -MappingRules $script:MappingRules
+            $optTrimActive = if ($script:chkTrimWhitespace) { [bool]$script:chkTrimWhitespace.IsChecked } else { $true }
+            $projected = Get-ProjectedRow -IncomingValues $incHash -MappingRules $script:MappingRules -Trim $optTrimActive
 
             # Build Mapping Results Preview Items
             $previewList = [System.Collections.Generic.List[object]]::new()
@@ -5485,11 +5903,16 @@ function Show-MasterUpdater {
                 $statusBg = if ($isLight) { '#F1F5F9' } else { '#334155' }
                 $statusFg = if ($isLight) { '#475569' } else { '#94A3B8' }
 
+                $optCase = if ($script:chkIgnoreCase) { [bool]$script:chkIgnoreCase.IsChecked } else { $true }
+                $optTrim = if ($script:chkTrimWhitespace) { [bool]$script:chkTrimWhitespace.IsChecked } else { $true }
+                $optSpec = if ($script:chkIgnoreSpecialChars) { [bool]$script:chkIgnoreSpecialChars.IsChecked } else { $true }
+                $optSpc  = if ($script:chkIgnoreAllSpaces) { [bool]$script:chkIgnoreAllSpaces.IsChecked } else { $true }
+
                 if (-not $isMapped) {
                     $statusText = Get-UiString 'PreviewStatusUnmapped'
                     $statusBg = if ($isLight) { '#F1F5F9' } else { '#1E293B' }
                     $statusFg = if ($isLight) { '#475569' } else { '#64748B' }
-                } elseif ([FastDiffHelper]::AreEqual($baseVal, $projVal, $false, $true, $false, $false)) {
+                } elseif ([FastDiffHelper]::AreEqual($baseVal, $projVal, $optCase, $optTrim, $optSpec, $optSpc)) {
                     $statusText = Get-UiString 'PreviewStatusIdentical'
                     $statusBg = if ($isLight) { '#D1FAE5' } else { '#064E3B' }
                     $statusFg = if ($isLight) { '#065F46' } else { '#34D399' }
@@ -5537,6 +5960,29 @@ function Show-MasterUpdater {
         }
     }
     $UpdateDataMappingPreview = $script:UpdateDataMappingPreview
+
+    # Comparison options toggle handlers: immediately refresh live mapping preview
+    $onCompareOptionChanged = {
+        if ($script:UpdateDataMappingPreview) {
+            & $script:UpdateDataMappingPreview
+        }
+    }
+    if ($chkIgnoreCase) {
+        $chkIgnoreCase.add_Checked($onCompareOptionChanged)
+        $chkIgnoreCase.add_Unchecked($onCompareOptionChanged)
+    }
+    if ($chkTrimWhitespace) {
+        $chkTrimWhitespace.add_Checked($onCompareOptionChanged)
+        $chkTrimWhitespace.add_Unchecked($onCompareOptionChanged)
+    }
+    if ($chkIgnoreSpecialChars) {
+        $chkIgnoreSpecialChars.add_Checked($onCompareOptionChanged)
+        $chkIgnoreSpecialChars.add_Unchecked($onCompareOptionChanged)
+    }
+    if ($chkIgnoreAllSpaces) {
+        $chkIgnoreAllSpaces.add_Checked($onCompareOptionChanged)
+        $chkIgnoreAllSpaces.add_Unchecked($onCompareOptionChanged)
+    }
 
     # Load Base File Handler
     $LoadBaseFile = {
@@ -5778,26 +6224,9 @@ function Show-MasterUpdater {
             return
         }
         $script:MappingRules.Clear()
-        foreach ($ih in $script:IncomingHeaders) {
-            $normIh = $ih.Trim().ToLowerInvariant() -replace '[_\-\s]+', ''
-            $matched = $null
-            foreach ($bh in $script:BaseHeaders) {
-                $normBh = $bh.Trim().ToLowerInvariant() -replace '[_\-\s]+', ''
-                if ($normBh -eq $normIh -or $normBh.Contains($normIh) -or $normIh.Contains($normBh)) {
-                    $matched = $bh
-                    break
-                }
-            }
-            if ($matched) {
-                $script:MappingRules.Add([PSCustomObject]@{
-                    BaseColumns   = @($matched)
-                    UpdateColumns = @($ih)
-                    MergeMode     = 'Exact'
-                    Separator     = ''
-                    BaseColsStr   = $matched
-                    UpdColsStr    = $ih
-                })
-            }
+        $autoRules = Invoke-AutoMapRules -BaseHeaders $script:BaseHeaders -IncomingHeaders $script:IncomingHeaders
+        foreach ($r in $autoRules) {
+            $script:MappingRules.Add($r)
         }
 
         # Auto-select Join Key: Only select if a matching key pair exists in BOTH files!
@@ -5972,8 +6401,10 @@ function Show-MasterUpdater {
         [System.Windows.Controls.Grid]::SetRow($colsGrid, 1)
         [void]$mainGrid.Children.Add($colsGrid)
 
-        # Row 2: Merge Mode and Separator controls
+        # Row 2: Merge Mode, Separator, and Diff Policy controls
         $modeGrid = New-Object System.Windows.Controls.Grid -Property @{ Margin = New-Object System.Windows.Thickness(0, 10, 0, 10) }
+        $modeGrid.RowDefinitions.Add((New-Object System.Windows.Controls.RowDefinition -Property @{ Height = [System.Windows.GridLength]::Auto }))
+        $modeGrid.RowDefinitions.Add((New-Object System.Windows.Controls.RowDefinition -Property @{ Height = [System.Windows.GridLength]::Auto }))
         $modeGrid.ColumnDefinitions.Add((New-Object System.Windows.Controls.ColumnDefinition -Property @{ Width = [System.Windows.GridLength]::new(1, [System.Windows.GridUnitType]::Star) }))
         $modeGrid.ColumnDefinitions.Add((New-Object System.Windows.Controls.ColumnDefinition -Property @{ Width = [System.Windows.GridLength]::new(14, [System.Windows.GridUnitType]::Pixel) }))
         $modeGrid.ColumnDefinitions.Add((New-Object System.Windows.Controls.ColumnDefinition -Property @{ Width = [System.Windows.GridLength]::new(1, [System.Windows.GridUnitType]::Star) }))
@@ -5992,6 +6423,7 @@ function Show-MasterUpdater {
         [void]$cmbM.Items.Add('Exact'); [void]$cmbM.Items.Add('Concatenate'); [void]$cmbM.Items.Add('FirstNonEmpty')
         $cmbM.SelectedIndex = 0
         [void]$spMode.Children.Add($lblM); [void]$spMode.Children.Add($cmbM)
+        [System.Windows.Controls.Grid]::SetRow($spMode, 0)
         [System.Windows.Controls.Grid]::SetColumn($spMode, 0)
         [void]$modeGrid.Children.Add($spMode)
 
@@ -6009,8 +6441,40 @@ function Show-MasterUpdater {
             Text        = ', '
         }
         [void]$spSep.Children.Add($lblS); [void]$spSep.Children.Add($txtS)
+        [System.Windows.Controls.Grid]::SetRow($spSep, 0)
         [System.Windows.Controls.Grid]::SetColumn($spSep, 2)
         [void]$modeGrid.Children.Add($spSep)
+
+        # Row 1: Diff Policy ComboBox
+        $spDiff = New-Object System.Windows.Controls.StackPanel -Property @{ Margin = New-Object System.Windows.Thickness(0, 8, 0, 0) }
+        $lblD = New-Object System.Windows.Controls.TextBlock -Property @{
+            Text       = Get-UiString 'ColDiffPolicy'
+            Foreground = $script:BrushConverter.ConvertFromString($p.TextSecondary)
+            Margin     = New-Object System.Windows.Thickness(0, 0, 0, 4)
+        }
+        $cmbDiff = New-Object System.Windows.Controls.ComboBox -Property @{
+            Background  = $script:BrushConverter.ConvertFromString($p.BgInput)
+            Foreground  = $script:BrushConverter.ConvertFromString($p.TextPrimary)
+            BorderBrush = $script:BrushConverter.ConvertFromString($p.BorderInput)
+        }
+        $diffPolicies = @(
+            @{ Tag = 'TrackChanges';        Text = (Get-UiString 'DiffPolicyTrackChanges' 'Śledź zmiany (standard)') },
+            @{ Tag = 'IgnoreChanges';       Text = (Get-UiString 'DiffPolicyIgnoreChanges' 'Ignoruj zmiany (tylko nowe wpisy)') },
+            @{ Tag = 'NormalizePostalCode'; Text = (Get-UiString 'DiffPolicyNormalizePostal' 'Ignoruj obecność kodu pocztowego') },
+            @{ Tag = 'FuzzyContainment';    Text = (Get-UiString 'DiffPolicyFuzzyContainment' 'Ignoruj dopiski w nazwach (zawieranie tekstu)') }
+        )
+        foreach ($dpItem in $diffPolicies) {
+            $cbi = New-Object System.Windows.Controls.ComboBoxItem
+            $cbi.Tag = $dpItem.Tag
+            $cbi.Content = $dpItem.Text
+            [void]$cmbDiff.Items.Add($cbi)
+        }
+        $cmbDiff.SelectedIndex = 0
+        [void]$spDiff.Children.Add($lblD); [void]$spDiff.Children.Add($cmbDiff)
+        [System.Windows.Controls.Grid]::SetRow($spDiff, 1)
+        [System.Windows.Controls.Grid]::SetColumn($spDiff, 0)
+        [System.Windows.Controls.Grid]::SetColumnSpan($spDiff, 3)
+        [void]$modeGrid.Children.Add($spDiff)
 
         [System.Windows.Controls.Grid]::SetRow($modeGrid, 2)
         [void]$mainGrid.Children.Add($modeGrid)
@@ -6088,7 +6552,8 @@ function Show-MasterUpdater {
             } else { '(brak / none)' }
 
             $modeExtra = if ($mSel -eq 'Concatenate') { " (Separator: '$sVal')" } else { "" }
-            $txtPreviewText.Text = "Base:   $bStr`nUpdate: $uStr`nMode:   $mSel$modeExtra"
+            $dpSel = if ($cmbDiff.SelectedItem -is [System.Windows.Controls.ComboBoxItem]) { $cmbDiff.SelectedItem.Content.ToString() } else { 'TrackChanges' }
+            $txtPreviewText.Text = "Base:   $bStr`nUpdate: $uStr`nMode:   $mSel$modeExtra`nPolicy: $dpSel"
         }
 
         $lbBase.add_SelectionChanged({ & $UpdatePreview })
@@ -6098,6 +6563,7 @@ function Show-MasterUpdater {
             if ($isConcat -and [string]::IsNullOrEmpty($txtS.Text)) { $txtS.Text = ', ' }
             & $UpdatePreview
         })
+        $cmbDiff.add_SelectionChanged({ & $UpdatePreview })
         $txtS.add_TextChanged({ & $UpdatePreview })
 
         # Pre-populate if ExistingRule
@@ -6113,6 +6579,14 @@ function Show-MasterUpdater {
             $mi = @('Exact', 'Concatenate', 'FirstNonEmpty').IndexOf($ExistingRule.MergeMode)
             if ($mi -ge 0) { $cmbM.SelectedIndex = $mi }
             $txtS.Text = if ($null -ne $ExistingRule.Separator) { $ExistingRule.Separator } else { '' }
+
+            $curDp = if ($ExistingRule.DiffPolicy) { $ExistingRule.DiffPolicy } else { 'TrackChanges' }
+            for ($i = 0; $i -lt $cmbDiff.Items.Count; $i++) {
+                if ($cmbDiff.Items[$i].Tag -eq $curDp) {
+                    $cmbDiff.SelectedIndex = $i
+                    break
+                }
+            }
         } else {
             if ($lbBase.Items.Count -gt 0) { $lbBase.SelectedIndex = 0 }
             if ($lbUpd.Items.Count -gt 0) { $lbUpd.SelectedIndex = 0 }
@@ -6133,23 +6607,29 @@ function Show-MasterUpdater {
             $uColsArr = [string[]]@($uSel | ForEach-Object { $_.ToString() })
             $mModeVal = if ($cmbM.SelectedItem) { $cmbM.SelectedItem.ToString() } else { 'Exact' }
             $sepVal   = $txtS.Text
+            $dpVal    = if ($cmbDiff.SelectedItem -is [System.Windows.Controls.ComboBoxItem]) { $cmbDiff.SelectedItem.Tag.ToString() } elseif ($cmbDiff.SelectedItem) { $cmbDiff.SelectedItem.ToString() } else { 'TrackChanges' }
+            $dpDisplay = Get-DiffPolicyDisplay $dpVal
 
             if ($ExistingRule) {
-                $ExistingRule.BaseColumns   = $bColsArr
-                $ExistingRule.UpdateColumns = $uColsArr
-                $ExistingRule.MergeMode     = $mModeVal
-                $ExistingRule.Separator     = $sepVal
-                $ExistingRule.BaseColsStr   = ($bColsArr -join ', ')
-                $ExistingRule.UpdColsStr    = ($uColsArr -join ', ')
+                $ExistingRule.BaseColumns       = $bColsArr
+                $ExistingRule.UpdateColumns     = $uColsArr
+                $ExistingRule.MergeMode         = $mModeVal
+                $ExistingRule.Separator         = $sepVal
+                $ExistingRule.DiffPolicy        = $dpVal
+                $ExistingRule.DiffPolicyDisplay = $dpDisplay
+                $ExistingRule.BaseColsStr       = ($bColsArr -join ', ')
+                $ExistingRule.UpdColsStr        = ($uColsArr -join ', ')
                 $gridMappingRules.Items.Refresh()
             } else {
                 $script:MappingRules.Add([PSCustomObject]@{
-                    BaseColumns   = $bColsArr
-                    UpdateColumns = $uColsArr
-                    MergeMode     = $mModeVal
-                    Separator     = $sepVal
-                    BaseColsStr   = ($bColsArr -join ', ')
-                    UpdColsStr    = ($uColsArr -join ', ')
+                    BaseColumns       = $bColsArr
+                    UpdateColumns     = $uColsArr
+                    MergeMode         = $mModeVal
+                    Separator         = $sepVal
+                    DiffPolicy        = $dpVal
+                    DiffPolicyDisplay = $dpDisplay
+                    BaseColsStr       = ($bColsArr -join ', ')
+                    UpdColsStr        = ($uColsArr -join ', ')
                 })
             }
             $ruleWin.Close()
@@ -6314,7 +6794,16 @@ function Show-MasterUpdater {
                 UpdateColumns = @($r.UpdateColumns)
                 MergeMode     = $r.MergeMode
                 Separator     = $r.Separator
+                DiffPolicy    = if ($r.PSObject.Properties['DiffPolicy'] -and $r.DiffPolicy) { $r.DiffPolicy } else { 'TrackChanges' }
             })
+        }
+
+        $compOptions = @{
+            IgnoreCase         = if ($script:chkIgnoreCase) { [bool]$script:chkIgnoreCase.IsChecked } else { $true }
+            Trim               = if ($script:chkTrimWhitespace) { [bool]$script:chkTrimWhitespace.IsChecked } else { $true }
+            TrimWhitespace     = if ($script:chkTrimWhitespace) { [bool]$script:chkTrimWhitespace.IsChecked } else { $true }
+            IgnoreSpecialChars = if ($script:chkIgnoreSpecialChars) { [bool]$script:chkIgnoreSpecialChars.IsChecked } else { $true }
+            IgnoreAllSpaces    = if ($script:chkIgnoreAllSpaces) { [bool]$script:chkIgnoreAllSpaces.IsChecked } else { $true }
         }
 
         $prof = [ordered]@{
@@ -6328,6 +6817,7 @@ function Show-MasterUpdater {
             JoinKeyBase       = $baseKeys
             JoinKeyUpdate     = $incKeys
             MappingRules      = $rulesList
+            CompareOptions    = $compOptions
         }
 
         [void](Save-MappingProfile -Profile $prof -StorePath $script:AppConfig.ProfileStorePath)
@@ -6392,9 +6882,48 @@ function Show-MasterUpdater {
             $baseRowStr = if ($rec.MatchedBaseRow) { (Get-UiString 'RowNumberFormat') -f $rec.MatchedBaseRow.RowNumber } else { '' }
             $txtDetailHeader.Text = "$((Get-UiString 'StatusBadgeChanged')): $($Item.Title) ($baseRowStr)"
 
-            # Diff Table with per-cell checkboxes (Q8)
+            # Row Action Tools (Select/Deselect All in Row)
+            $spRowTools = New-Object System.Windows.Controls.StackPanel -Property @{
+                Orientation = [System.Windows.Controls.Orientation]::Horizontal
+                Margin      = New-Object System.Windows.Thickness(0, 0, 0, 8)
+            }
+            $btnSelAllRow = New-Object System.Windows.Controls.Button -Property @{
+                Content         = Get-UiString 'BtnSelectAllRowFields' 'Zaznacz wszystkie w wierszu'
+                Background      = $script:BrushConverter.ConvertFromString($p.BgCardHover)
+                Foreground      = $script:BrushConverter.ConvertFromString($p.TextPrimary)
+                BorderBrush     = $script:BrushConverter.ConvertFromString($p.BorderCard)
+                BorderThickness = New-Object System.Windows.Thickness(1)
+                Padding         = New-Object System.Windows.Thickness(8, 3, 8, 3)
+                Margin          = New-Object System.Windows.Thickness(0, 0, 6, 0)
+                FontSize        = 11
+                Cursor          = [System.Windows.Input.Cursors]::Hand
+            }
+            $btnDeselAllRow = New-Object System.Windows.Controls.Button -Property @{
+                Content         = Get-UiString 'BtnDeselectAllRowFields' 'Odznacz wszystkie w wierszu'
+                Background      = $script:BrushConverter.ConvertFromString($p.BgCardHover)
+                Foreground      = $script:BrushConverter.ConvertFromString($p.TextPrimary)
+                BorderBrush     = $script:BrushConverter.ConvertFromString($p.BorderCard)
+                BorderThickness = New-Object System.Windows.Thickness(1)
+                Padding         = New-Object System.Windows.Thickness(8, 3, 8, 3)
+                FontSize        = 11
+                Cursor          = [System.Windows.Input.Cursors]::Hand
+            }
+            $allRowCheckboxes = [System.Collections.Generic.List[object]]::new()
+            $btnSelAllRow.add_Click({
+                foreach ($c in $allRowCheckboxes) { $c.IsChecked = $true }
+                & $script:UpdateStagingSummary
+            })
+            $btnDeselAllRow.add_Click({
+                foreach ($c in $allRowCheckboxes) { $c.IsChecked = $false }
+                & $script:UpdateStagingSummary
+            })
+            [void]$spRowTools.Children.Add($btnSelAllRow)
+            [void]$spRowTools.Children.Add($btnDeselAllRow)
+            [void]$panelDiffContainer.Children.Add($spRowTools)
+
+            # Diff Table with per-cell checkboxes (Q8) and inline editing
             $grid = New-Object System.Windows.Controls.Grid
-            $grid.Margin = New-Object System.Windows.Thickness(0, 8, 0, 0)
+            $grid.Margin = New-Object System.Windows.Thickness(0, 0, 0, 0)
             [void]$grid.ColumnDefinitions.Add((New-Object System.Windows.Controls.ColumnDefinition -Property @{ Width = [System.Windows.GridLength]::Auto }))
             [void]$grid.ColumnDefinitions.Add((New-Object System.Windows.Controls.ColumnDefinition -Property @{ Width = [System.Windows.GridLength]::new(180) }))
             [void]$grid.ColumnDefinitions.Add((New-Object System.Windows.Controls.ColumnDefinition -Property @{ Width = [System.Windows.GridLength]::new(1, [System.Windows.GridUnitType]::Star) }))
@@ -6423,8 +6952,17 @@ function Show-MasterUpdater {
                     VerticalAlignment = [System.Windows.VerticalAlignment]::Center
                     Margin = New-Object System.Windows.Thickness(0, 4, 10, 4)
                 }
-                $chk.add_Checked({ $Item.SelectedCells[$colKey] = $true; $chg.SelectedForUpdate = $true })
-                $chk.add_Unchecked({ $Item.SelectedCells[$colKey] = $false; $chg.SelectedForUpdate = $false })
+                [void]$allRowCheckboxes.Add($chk)
+                $chk.add_Checked({
+                    $Item.SelectedCells[$colKey] = $true
+                    $chg.SelectedForUpdate = $true
+                    & $script:UpdateStagingSummary
+                })
+                $chk.add_Unchecked({
+                    $Item.SelectedCells[$colKey] = $false
+                    $chg.SelectedForUpdate = $false
+                    & $script:UpdateStagingSummary
+                })
 
                 $txtCol = New-Object System.Windows.Controls.TextBlock -Property @{
                     Text = $chg.BaseColumn
@@ -6441,20 +6979,85 @@ function Show-MasterUpdater {
                     Margin = New-Object System.Windows.Thickness(0, 4, 10, 4)
                 }
 
+                $isDirty = ($chg.Contains('CustomEdited') -and $chg.CustomEdited -eq $true)
+                $bdrBrushHex = if ($isDirty) { $p.AccentBlue } else { $p.DiffCellNewBorder }
+                $bdrThickVal = if ($isDirty) { 2 } else { 1 }
                 $bdrNew = New-Object System.Windows.Controls.Border -Property @{
-                    Background = $script:BrushConverter.ConvertFromString($p.DiffCellNewBg)
-                    BorderBrush = $script:BrushConverter.ConvertFromString($p.DiffCellNewBorder)
-                    BorderThickness = New-Object System.Windows.Thickness(1)
-                    CornerRadius = New-Object System.Windows.CornerRadius(3)
-                    Padding = New-Object System.Windows.Thickness(6, 2, 6, 2)
-                    Margin = New-Object System.Windows.Thickness(0, 2, 0, 2)
+                    Background      = $script:BrushConverter.ConvertFromString($p.DiffCellNewBg)
+                    BorderBrush     = $script:BrushConverter.ConvertFromString($bdrBrushHex)
+                    BorderThickness = New-Object System.Windows.Thickness($bdrThickVal)
+                    CornerRadius    = New-Object System.Windows.CornerRadius(4)
+                    Padding         = New-Object System.Windows.Thickness(4, 2, 4, 2)
+                    Margin          = New-Object System.Windows.Thickness(0, 2, 0, 2)
                 }
-                $txtNew = New-Object System.Windows.Controls.TextBlock -Property @{
-                    Text = $(if ($chg.NewValue) { $chg.NewValue.ToString() } else { '' })
-                    Foreground = $script:BrushConverter.ConvertFromString($p.DiffCellNewFg)
-                    FontWeight = [System.Windows.FontWeights]::Bold
+
+                $gridNewCell = New-Object System.Windows.Controls.Grid
+                [void]$gridNewCell.ColumnDefinitions.Add((New-Object System.Windows.Controls.ColumnDefinition -Property @{ Width = [System.Windows.GridLength]::new(1, [System.Windows.GridUnitType]::Star) }))
+                [void]$gridNewCell.ColumnDefinitions.Add((New-Object System.Windows.Controls.ColumnDefinition -Property @{ Width = [System.Windows.GridLength]::Auto }))
+
+                $txtEditNew = New-Object System.Windows.Controls.TextBox -Property @{
+                    Text            = $(if ($null -ne $chg.NewValue) { $chg.NewValue.ToString() } else { '' })
+                    Foreground      = $script:BrushConverter.ConvertFromString($p.DiffCellNewFg)
+                    Background      = [System.Windows.Media.Brushes]::Transparent
+                    BorderThickness = New-Object System.Windows.Thickness(0)
+                    FontWeight      = [System.Windows.FontWeights]::Bold
+                    VerticalAlignment = [System.Windows.VerticalAlignment]::Center
+                    Padding         = New-Object System.Windows.Thickness(2, 1, 2, 1)
                 }
-                $bdrNew.Child = $txtNew
+
+                $btnRevert = New-Object System.Windows.Controls.Button -Property @{
+                    Content         = '↺'
+                    ToolTip         = (Get-UiString 'TooltipRevertOriginal' 'Przywróć wartość z pliku zmian')
+                    FontSize        = 12
+                    FontWeight      = [System.Windows.FontWeights]::Bold
+                    Foreground      = $script:BrushConverter.ConvertFromString($p.AccentBlue)
+                    Background      = [System.Windows.Media.Brushes]::Transparent
+                    BorderThickness = New-Object System.Windows.Thickness(0)
+                    Padding         = New-Object System.Windows.Thickness(4, 0, 4, 0)
+                    Margin          = New-Object System.Windows.Thickness(4, 0, 0, 0)
+                    Cursor          = [System.Windows.Input.Cursors]::Hand
+                    Visibility      = if ($isDirty) { [System.Windows.Visibility]::Visible } else { [System.Windows.Visibility]::Collapsed }
+                }
+
+                $capturedChg = $chg
+                $capturedBdr = $bdrNew
+                $capturedRevert = $btnRevert
+                $capturedTxt = $txtEditNew
+
+                $txtEditNew.add_TextChanged({
+                    $curText = $capturedTxt.Text
+                    $origVal = if ($capturedChg.Contains('OriginalNewValue') -and $null -ne $capturedChg.OriginalNewValue) { $capturedChg.OriginalNewValue.ToString() } else { '' }
+                    $capturedChg.NewValue = $curText
+                    if ($curText -ne $origVal) {
+                        $capturedChg.CustomEdited = $true
+                        $capturedBdr.BorderBrush = $script:BrushConverter.ConvertFromString($p.AccentBlue)
+                        $capturedBdr.BorderThickness = New-Object System.Windows.Thickness(2)
+                        $capturedRevert.Visibility = [System.Windows.Visibility]::Visible
+                    } else {
+                        $capturedChg.CustomEdited = $false
+                        $capturedBdr.BorderBrush = $script:BrushConverter.ConvertFromString($p.DiffCellNewBorder)
+                        $capturedBdr.BorderThickness = New-Object System.Windows.Thickness(1)
+                        $capturedRevert.Visibility = [System.Windows.Visibility]::Collapsed
+                    }
+                    & $script:UpdateStagingSummary
+                })
+
+                $btnRevert.add_Click({
+                    $origVal = if ($capturedChg.Contains('OriginalNewValue') -and $null -ne $capturedChg.OriginalNewValue) { $capturedChg.OriginalNewValue.ToString() } else { '' }
+                    $capturedTxt.Text = $origVal
+                    $capturedChg.NewValue = $origVal
+                    $capturedChg.CustomEdited = $false
+                    $capturedBdr.BorderBrush = $script:BrushConverter.ConvertFromString($p.DiffCellNewBorder)
+                    $capturedBdr.BorderThickness = New-Object System.Windows.Thickness(1)
+                    $capturedRevert.Visibility = [System.Windows.Visibility]::Collapsed
+                    & $script:UpdateStagingSummary
+                })
+
+                [System.Windows.Controls.Grid]::SetColumn($txtEditNew, 0)
+                [System.Windows.Controls.Grid]::SetColumn($btnRevert, 1)
+                [void]$gridNewCell.Children.Add($txtEditNew)
+                [void]$gridNewCell.Children.Add($btnRevert)
+                $bdrNew.Child = $gridNewCell
 
                 [System.Windows.Controls.Grid]::SetRow($chk, $rIdx); [System.Windows.Controls.Grid]::SetColumn($chk, 0); [void]$grid.Children.Add($chk)
                 [System.Windows.Controls.Grid]::SetRow($txtCol, $rIdx); [System.Windows.Controls.Grid]::SetColumn($txtCol, 1); [void]$grid.Children.Add($txtCol)
@@ -6469,9 +7072,48 @@ function Show-MasterUpdater {
             $txtDetailHeader.Text = "$((Get-UiString 'StatusBadgeUnchanged')): $($Item.Title) ($baseRowStr)"
 
             if ($rec.Changes -and $rec.Changes.Count -gt 0) {
-                # Diff table with selective update
+                # Row Action Tools (Select/Deselect All in Row)
+                $spRowTools = New-Object System.Windows.Controls.StackPanel -Property @{
+                    Orientation = [System.Windows.Controls.Orientation]::Horizontal
+                    Margin      = New-Object System.Windows.Thickness(0, 0, 0, 8)
+                }
+                $btnSelAllRow = New-Object System.Windows.Controls.Button -Property @{
+                    Content         = Get-UiString 'BtnSelectAllRowFields' 'Zaznacz wszystkie w wierszu'
+                    Background      = $script:BrushConverter.ConvertFromString($p.BgCardHover)
+                    Foreground      = $script:BrushConverter.ConvertFromString($p.TextPrimary)
+                    BorderBrush     = $script:BrushConverter.ConvertFromString($p.BorderCard)
+                    BorderThickness = New-Object System.Windows.Thickness(1)
+                    Padding         = New-Object System.Windows.Thickness(8, 3, 8, 3)
+                    Margin          = New-Object System.Windows.Thickness(0, 0, 6, 0)
+                    FontSize        = 11
+                    Cursor          = [System.Windows.Input.Cursors]::Hand
+                }
+                $btnDeselAllRow = New-Object System.Windows.Controls.Button -Property @{
+                    Content         = Get-UiString 'BtnDeselectAllRowFields' 'Odznacz wszystkie w wierszu'
+                    Background      = $script:BrushConverter.ConvertFromString($p.BgCardHover)
+                    Foreground      = $script:BrushConverter.ConvertFromString($p.TextPrimary)
+                    BorderBrush     = $script:BrushConverter.ConvertFromString($p.BorderCard)
+                    BorderThickness = New-Object System.Windows.Thickness(1)
+                    Padding         = New-Object System.Windows.Thickness(8, 3, 8, 3)
+                    FontSize        = 11
+                    Cursor          = [System.Windows.Input.Cursors]::Hand
+                }
+                $allRowCheckboxes = [System.Collections.Generic.List[object]]::new()
+                $btnSelAllRow.add_Click({
+                    foreach ($c in $allRowCheckboxes) { $c.IsChecked = $true }
+                    & $script:UpdateStagingSummary
+                })
+                $btnDeselAllRow.add_Click({
+                    foreach ($c in $allRowCheckboxes) { $c.IsChecked = $false }
+                    & $script:UpdateStagingSummary
+                })
+                [void]$spRowTools.Children.Add($btnSelAllRow)
+                [void]$spRowTools.Children.Add($btnDeselAllRow)
+                [void]$panelDiffContainer.Children.Add($spRowTools)
+
+                # Diff table with selective update and inline editing
                 $grid = New-Object System.Windows.Controls.Grid
-                $grid.Margin = New-Object System.Windows.Thickness(0, 8, 0, 0)
+                $grid.Margin = New-Object System.Windows.Thickness(0, 0, 0, 0)
                 [void]$grid.ColumnDefinitions.Add((New-Object System.Windows.Controls.ColumnDefinition -Property @{ Width = [System.Windows.GridLength]::Auto }))
                 [void]$grid.ColumnDefinitions.Add((New-Object System.Windows.Controls.ColumnDefinition -Property @{ Width = [System.Windows.GridLength]::new(180) }))
                 [void]$grid.ColumnDefinitions.Add((New-Object System.Windows.Controls.ColumnDefinition -Property @{ Width = [System.Windows.GridLength]::new(1, [System.Windows.GridUnitType]::Star) }))
@@ -6497,8 +7139,17 @@ function Show-MasterUpdater {
                         VerticalAlignment = [System.Windows.VerticalAlignment]::Center
                         Margin = New-Object System.Windows.Thickness(0, 4, 10, 4)
                     }
-                    $chk.add_Checked({ $Item.SelectedCells[$colKey] = $true; $chg.SelectedForUpdate = $true })
-                    $chk.add_Unchecked({ $Item.SelectedCells[$colKey] = $false; $chg.SelectedForUpdate = $false })
+                    [void]$allRowCheckboxes.Add($chk)
+                    $chk.add_Checked({
+                        $Item.SelectedCells[$colKey] = $true
+                        $chg.SelectedForUpdate = $true
+                        & $script:UpdateStagingSummary
+                    })
+                    $chk.add_Unchecked({
+                        $Item.SelectedCells[$colKey] = $false
+                        $chg.SelectedForUpdate = $false
+                        & $script:UpdateStagingSummary
+                    })
 
                     $txtCol = New-Object System.Windows.Controls.TextBlock -Property @{
                         Text = $chg.BaseColumn
@@ -6513,20 +7164,86 @@ function Show-MasterUpdater {
                         VerticalAlignment = [System.Windows.VerticalAlignment]::Center
                         Margin = New-Object System.Windows.Thickness(0, 4, 10, 4)
                     }
+
+                    $isDirty = ($chg.Contains('CustomEdited') -and $chg.CustomEdited -eq $true)
+                    $bdrBrushHex = if ($isDirty) { $p.AccentBlue } else { $p.DiffCellNewBorder }
+                    $bdrThickVal = if ($isDirty) { 2 } else { 1 }
                     $bdrNew = New-Object System.Windows.Controls.Border -Property @{
-                        Background = $script:BrushConverter.ConvertFromString($p.DiffCellNewBg)
-                        BorderBrush = $script:BrushConverter.ConvertFromString($p.DiffCellNewBorder)
-                        BorderThickness = New-Object System.Windows.Thickness(1)
-                        CornerRadius = New-Object System.Windows.CornerRadius(3)
-                        Padding = New-Object System.Windows.Thickness(6, 2, 6, 2)
-                        Margin = New-Object System.Windows.Thickness(0, 2, 0, 2)
+                        Background      = $script:BrushConverter.ConvertFromString($p.DiffCellNewBg)
+                        BorderBrush     = $script:BrushConverter.ConvertFromString($bdrBrushHex)
+                        BorderThickness = New-Object System.Windows.Thickness($bdrThickVal)
+                        CornerRadius    = New-Object System.Windows.CornerRadius(4)
+                        Padding         = New-Object System.Windows.Thickness(4, 2, 4, 2)
+                        Margin          = New-Object System.Windows.Thickness(0, 2, 0, 2)
                     }
-                    $txtNew = New-Object System.Windows.Controls.TextBlock -Property @{
-                        Text = $(if ($null -ne $chg.NewValue) { $chg.NewValue.ToString() } else { '' })
-                        Foreground = $script:BrushConverter.ConvertFromString($p.DiffCellNewFg)
-                        FontWeight = [System.Windows.FontWeights]::Bold
+
+                    $gridNewCell = New-Object System.Windows.Controls.Grid
+                    [void]$gridNewCell.ColumnDefinitions.Add((New-Object System.Windows.Controls.ColumnDefinition -Property @{ Width = [System.Windows.GridLength]::new(1, [System.Windows.GridUnitType]::Star) }))
+                    [void]$gridNewCell.ColumnDefinitions.Add((New-Object System.Windows.Controls.ColumnDefinition -Property @{ Width = [System.Windows.GridLength]::Auto }))
+
+                    $txtEditNew = New-Object System.Windows.Controls.TextBox -Property @{
+                        Text            = $(if ($null -ne $chg.NewValue) { $chg.NewValue.ToString() } else { '' })
+                        Foreground      = $script:BrushConverter.ConvertFromString($p.DiffCellNewFg)
+                        Background      = [System.Windows.Media.Brushes]::Transparent
+                        BorderThickness = New-Object System.Windows.Thickness(0)
+                        FontWeight      = [System.Windows.FontWeights]::Bold
+                        VerticalAlignment = [System.Windows.VerticalAlignment]::Center
+                        Padding         = New-Object System.Windows.Thickness(2, 1, 2, 1)
                     }
-                    $bdrNew.Child = $txtNew
+
+                    $btnRevert = New-Object System.Windows.Controls.Button -Property @{
+                        Content         = '↺'
+                        ToolTip         = (Get-UiString 'TooltipRevertOriginal' 'Przywróć wartość z pliku zmian')
+                        FontSize        = 12
+                        FontWeight      = [System.Windows.FontWeights]::Bold
+                        Foreground      = $script:BrushConverter.ConvertFromString($p.AccentBlue)
+                        Background      = [System.Windows.Media.Brushes]::Transparent
+                        BorderThickness = New-Object System.Windows.Thickness(0)
+                        Padding         = New-Object System.Windows.Thickness(4, 0, 4, 0)
+                        Margin          = New-Object System.Windows.Thickness(4, 0, 0, 0)
+                        Cursor          = [System.Windows.Input.Cursors]::Hand
+                        Visibility      = if ($isDirty) { [System.Windows.Visibility]::Visible } else { [System.Windows.Visibility]::Collapsed }
+                    }
+
+                    $capturedChg = $chg
+                    $capturedBdr = $bdrNew
+                    $capturedRevert = $btnRevert
+                    $capturedTxt = $txtEditNew
+
+                    $txtEditNew.add_TextChanged({
+                        $curText = $capturedTxt.Text
+                        $origVal = if ($capturedChg.Contains('OriginalNewValue') -and $null -ne $capturedChg.OriginalNewValue) { $capturedChg.OriginalNewValue.ToString() } else { '' }
+                        $capturedChg.NewValue = $curText
+                        if ($curText -ne $origVal) {
+                            $capturedChg.CustomEdited = $true
+                            $capturedBdr.BorderBrush = $script:BrushConverter.ConvertFromString($p.AccentBlue)
+                            $capturedBdr.BorderThickness = New-Object System.Windows.Thickness(2)
+                            $capturedRevert.Visibility = [System.Windows.Visibility]::Visible
+                        } else {
+                            $capturedChg.CustomEdited = $false
+                            $capturedBdr.BorderBrush = $script:BrushConverter.ConvertFromString($p.DiffCellNewBorder)
+                            $capturedBdr.BorderThickness = New-Object System.Windows.Thickness(1)
+                            $capturedRevert.Visibility = [System.Windows.Visibility]::Collapsed
+                        }
+                        & $script:UpdateStagingSummary
+                    })
+
+                    $btnRevert.add_Click({
+                        $origVal = if ($capturedChg.Contains('OriginalNewValue') -and $null -ne $capturedChg.OriginalNewValue) { $capturedChg.OriginalNewValue.ToString() } else { '' }
+                        $capturedTxt.Text = $origVal
+                        $capturedChg.NewValue = $origVal
+                        $capturedChg.CustomEdited = $false
+                        $capturedBdr.BorderBrush = $script:BrushConverter.ConvertFromString($p.DiffCellNewBorder)
+                        $capturedBdr.BorderThickness = New-Object System.Windows.Thickness(1)
+                        $capturedRevert.Visibility = [System.Windows.Visibility]::Collapsed
+                        & $script:UpdateStagingSummary
+                    })
+
+                    [System.Windows.Controls.Grid]::SetColumn($txtEditNew, 0)
+                    [System.Windows.Controls.Grid]::SetColumn($btnRevert, 1)
+                    [void]$gridNewCell.Children.Add($txtEditNew)
+                    [void]$gridNewCell.Children.Add($btnRevert)
+                    $bdrNew.Child = $gridNewCell
 
                     [System.Windows.Controls.Grid]::SetRow($chk, $rIdx); [System.Windows.Controls.Grid]::SetColumn($chk, 0); [void]$grid.Children.Add($chk)
                     [System.Windows.Controls.Grid]::SetRow($txtCol, $rIdx); [System.Windows.Controls.Grid]::SetColumn($txtCol, 1); [void]$grid.Children.Add($txtCol)
@@ -6987,6 +7704,65 @@ function Show-MasterUpdater {
         & $script:UpdateCounters
         if ($btnApplyAccepted) {
             $btnApplyAccepted.IsEnabled = ($script:AllReviewItems | Where-Object { $_.Decision -eq 'Accepted' }).Count -gt 0
+        }
+
+        # Populate Batch Column Toggles
+        if ($wrapBatchColToggles -and $cardBatchToggles) {
+            $wrapBatchColToggles.Children.Clear()
+            $uniqueCols = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+            foreach ($it in $script:AllReviewItems) {
+                if ($it.Record -and $it.Record.Changes) {
+                    foreach ($c in $it.Record.Changes) {
+                        if ($c.BaseColumn) { [void]$uniqueCols.Add($c.BaseColumn) }
+                    }
+                }
+            }
+
+            if ($uniqueCols.Count -gt 0) {
+                $cardBatchToggles.Visibility = [System.Windows.Visibility]::Visible
+                $p = Get-UpdaterThemePalette $script:CurrentTheme
+                foreach ($colName in ($uniqueCols | Sort-Object)) {
+                    $chkCol = New-Object System.Windows.Controls.CheckBox -Property @{
+                        Content         = $colName
+                        IsChecked       = $true
+                        Foreground      = $script:BrushConverter.ConvertFromString($p.TextPrimary)
+                        FontWeight      = [System.Windows.FontWeights]::SemiBold
+                        FontSize        = 11
+                        Margin          = New-Object System.Windows.Thickness(0, 0, 12, 4)
+                        Cursor          = [System.Windows.Input.Cursors]::Hand
+                    }
+                    $capturedCol = $colName
+                    $chkCol.add_Checked({
+                        $colToToggle = $capturedCol
+                        foreach ($item in $script:AllReviewItems) {
+                            if ($item.SelectedCells) { $item.SelectedCells[$colToToggle] = $true }
+                            if ($item.Record -and $item.Record.Changes) {
+                                foreach ($c in $item.Record.Changes) {
+                                    if ($c.BaseColumn -eq $colToToggle) { $c.SelectedForUpdate = $true }
+                                }
+                            }
+                        }
+                        if ($lbReviewItems.SelectedItem) { & $RenderDetailPane $lbReviewItems.SelectedItem }
+                        & $script:UpdateStagingSummary
+                    })
+                    $chkCol.add_Unchecked({
+                        $colToToggle = $capturedCol
+                        foreach ($item in $script:AllReviewItems) {
+                            if ($item.SelectedCells) { $item.SelectedCells[$colToToggle] = $false }
+                            if ($item.Record -and $item.Record.Changes) {
+                                foreach ($c in $item.Record.Changes) {
+                                    if ($c.BaseColumn -eq $colToToggle) { $c.SelectedForUpdate = $false }
+                                }
+                            }
+                        }
+                        if ($lbReviewItems.SelectedItem) { & $RenderDetailPane $lbReviewItems.SelectedItem }
+                        & $script:UpdateStagingSummary
+                    })
+                    [void]$wrapBatchColToggles.Children.Add($chkCol)
+                }
+            } else {
+                $cardBatchToggles.Visibility = [System.Windows.Visibility]::Collapsed
+            }
         }
     }
 
@@ -7525,7 +8301,15 @@ function Show-MasterUpdater {
             return
         }
 
-        $comp = Invoke-MasterCompare -BaseRows $baseRows -IncomingRows $incRows -MappingRules $script:MappingRules -BaseJoinKey $baseKeys -IncomingJoinKey $incKeys -BaseHeaders $script:BaseHeaders -DetectRemoved ($script:AppConfig.DetectRemovedRows -eq $true) -MarkDeletedColumn $script:AppConfig.MarkDeletedColumn -MarkDeletedValue $script:AppConfig.MarkDeletedValue
+        $compOptions = @{
+            IgnoreCase         = if ($script:chkIgnoreCase) { [bool]$script:chkIgnoreCase.IsChecked } else { $true }
+            Trim               = if ($script:chkTrimWhitespace) { [bool]$script:chkTrimWhitespace.IsChecked } else { $true }
+            TrimWhitespace     = if ($script:chkTrimWhitespace) { [bool]$script:chkTrimWhitespace.IsChecked } else { $true }
+            IgnoreSpecialChars = if ($script:chkIgnoreSpecialChars) { [bool]$script:chkIgnoreSpecialChars.IsChecked } else { $true }
+            IgnoreAllSpaces    = if ($script:chkIgnoreAllSpaces) { [bool]$script:chkIgnoreAllSpaces.IsChecked } else { $true }
+        }
+
+        $comp = Invoke-MasterCompare -BaseRows $baseRows -IncomingRows $incRows -MappingProfile $script:CurrentProfile -MappingRules $script:MappingRules -BaseJoinKey $baseKeys -IncomingJoinKey $incKeys -CompareOptions $compOptions -BaseHeaders $script:BaseHeaders -DetectRemoved ($script:AppConfig.DetectRemovedRows -eq $true) -MarkDeletedColumn $script:AppConfig.MarkDeletedColumn -MarkDeletedValue $script:AppConfig.MarkDeletedValue
         $script:ComparisonResult = $comp
 
         & $script:PopulateReviewItems
@@ -7590,12 +8374,91 @@ function Show-MasterUpdater {
             [System.Windows.Forms.MessageBox]::Show($succMsg, (Get-UiString 'InfoTitle'), [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
             $txtStatusMsg.Text = Get-UiString 'StatusWriteSuccess'
             $btnApplyAccepted.IsEnabled = $false
+            if ($btnApplyToNewFile) { $btnApplyToNewFile.IsEnabled = $false }
         } catch {
                         $msg = (Get-UiString 'ErrSaveWriteback') -f $_.Exception.Message
             [System.Windows.Forms.MessageBox]::Show($msg, (Get-UiString 'ErrorTitle'), [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
             $txtStatusMsg.Text = (Get-UiString 'StatusWriteError') -f $_.Message
         }
     })
+
+    # Apply to New File Button (Create a new updated copy without touching original base file)
+    if ($btnApplyToNewFile) {
+        $btnApplyToNewFile.add_Click({
+            $accepted = @($script:AllReviewItems | Where-Object { $_.Decision -eq 'Accepted' })
+            if ($accepted.Length -eq 0) {
+                [System.Windows.Forms.MessageBox]::Show((Get-UiString 'StatusNoAccepted'), (Get-UiString 'WarningTitle'), [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+                return
+            }
+
+            $basePath  = $txtBasePath.Text
+            $baseSheet = if ($cmbBaseSheet.SelectedItem) { $cmbBaseSheet.SelectedItem.ToString() } else { '' }
+            if (-not (Test-Path $basePath)) {
+                $errFileNotFound = (Get-UiString 'ErrSaveWriteback') -f "Base file not found: $basePath"
+                [System.Windows.Forms.MessageBox]::Show($errFileNotFound, (Get-UiString 'ErrorTitle'), [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+                return
+            }
+
+            $baseExt = [System.IO.Path]::GetExtension($basePath)
+            $baseDir = [System.IO.Path]::GetDirectoryName($basePath)
+            $baseName = [System.IO.Path]::GetFileNameWithoutExtension($basePath)
+            $defaultNewName = "{0}_Updated_{1}{2}" -f $baseName, (Get-Date -Format 'yyyyMMdd_HHmm'), $baseExt
+
+            $sfd = New-Object System.Windows.Forms.SaveFileDialog
+            $sfd.Title = Get-UiString 'BtnApplyToNewFile'
+            if (Test-Path $baseDir) { $sfd.InitialDirectory = $baseDir }
+            $sfd.FileName = $defaultNewName
+            $sfd.Filter = if ($baseExt -eq '.csv') { "CSV (*.csv)|*.csv|All Files (*.*)|*.*" } else { "Excel Workbook (*.xlsx)|*.xlsx|All Files (*.*)|*.*" }
+
+            if ($sfd.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) { return }
+            $newFilePath = $sfd.FileName
+
+            # Check if user selected the exact same file path as the original base file
+            if ([string]::Equals([System.IO.Path]::GetFullPath($newFilePath), [System.IO.Path]::GetFullPath($basePath), [System.StringComparison]::OrdinalIgnoreCase)) {
+                $sameFileWarn = if ($script:CurrentLanguage -eq 'pl') {
+                    "Wybrano ten sam plik bazy! Użyj przycisku 'Zastosuj do bazy' lub wybierz inną nazwę nowego pliku."
+                } elseif ($script:CurrentLanguage -eq 'de') {
+                    "Sie haben dieselbe Datei ausgewählt! Verwenden Sie 'Anwenden' oder wählen Sie einen anderen Dateinamen."
+                } else {
+                    "You selected the original base file! Use 'Apply to Base' or specify a different new file name."
+                }
+                [System.Windows.Forms.MessageBox]::Show($sameFileWarn, (Get-UiString 'WarningTitle'), [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+                return
+            }
+
+            $txtStatusMsg.Text = Get-UiString 'StatusWriting'
+            [System.Windows.Forms.Application]::DoEvents()
+
+            # Synchronize selective cell updates
+            $accRecords = [System.Collections.Generic.List[object]]::new()
+            foreach ($item in $accepted) {
+                $rec = $item.Record
+                if ($rec.Changes) {
+                    foreach ($chg in $rec.Changes) {
+                        $chg.SelectedForUpdate = if ($item.SelectedCells) { ($item.SelectedCells[$chg.BaseColumn] -ne $false) } else { $true }
+                    }
+                }
+                $accRecords.Add($rec)
+            }
+
+            try {
+                # Copy original base file to new destination
+                [System.IO.File]::Copy($basePath, $newFilePath, $true)
+
+                # Write changes into the new file
+                $wbRes = Invoke-MasterWriteBack -BaseFilePath $newFilePath -BaseSheet $baseSheet -AcceptedItems $accRecords -AppConfig $script:AppConfig
+                $logRes = Write-ImportLog -LogDirectory $script:AppConfig.LogDirectory -BatchId $wbRes.BatchId -ReviewItems $script:AllReviewItems -WriteBackResult $wbRes -BaseFilePath $newFilePath -RedactNames $script:AppConfig.RedactNamesInLog -LogChangesToBaseSheet ($script:AppConfig.LogChangesToBaseSheet -eq $true) -BaseSheetLogName ($(if ($script:AppConfig.BaseSheetLogName) { $script:AppConfig.BaseSheetLogName } else { 'ImportLog' }))
+
+                $succMsg = (Get-UiString 'MsgWriteNewFileSuccess') -f $newFilePath, $wbRes.UpdatedCells, $wbRes.AddedRows, $logRes.TxtPath
+                [System.Windows.Forms.MessageBox]::Show($succMsg, (Get-UiString 'InfoTitle'), [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+                $txtStatusMsg.Text = Get-UiString 'StatusWriteSuccess'
+            } catch {
+                $msg = (Get-UiString 'ErrSaveWriteback') -f $_.Exception.Message
+                [System.Windows.Forms.MessageBox]::Show($msg, (Get-UiString 'ErrorTitle'), [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+                $txtStatusMsg.Text = (Get-UiString 'StatusWriteError') -f $_.Message
+            }
+        })
+    }
 
     # Settings Button (Tabbed Dialog: General + Metadata Columns)
     $btnSettings.add_Click({
@@ -8081,7 +8944,20 @@ function Show-MasterUpdater {
         $ti1.Content = $sv1
         [void]$tc.Items.Add($ti1)
 
-        # Tab 2: Backups & Logs
+        # Tab 2: Merge & Compare Modes
+        $tiMerge = New-Object System.Windows.Controls.TabItem -Property @{ Header = Get-UiString 'HelpTabMergeModes' }
+        $svMerge = New-Object System.Windows.Controls.ScrollViewer -Property @{ VerticalScrollBarVisibility = 'Auto'; Margin = New-Object System.Windows.Thickness(16) }
+        $spMerge = New-Object System.Windows.Controls.StackPanel
+
+        $tmc1 = & $MakeCard (Get-UiString 'HelpMergeModesCardTitle') (Get-UiString 'HelpMergeModesCardBody')
+        $tmc2 = & $MakeCard (Get-UiString 'HelpCompareOptionsCardTitle') (Get-UiString 'HelpCompareOptionsCardBody')
+        $tmc3 = & $MakeCard (Get-UiString 'HelpSmartAutoMapCardTitle') (Get-UiString 'HelpSmartAutoMapCardBody')
+        [void]$spMerge.Children.Add($tmc1); [void]$spMerge.Children.Add($tmc2); [void]$spMerge.Children.Add($tmc3)
+        $svMerge.Content = $spMerge
+        $tiMerge.Content = $svMerge
+        [void]$tc.Items.Add($tiMerge)
+
+        # Tab 3: Backups & Logs
         $ti2 = New-Object System.Windows.Controls.TabItem -Property @{ Header = Get-UiString 'HelpTabBackupsLogs' }
         $sv2 = New-Object System.Windows.Controls.ScrollViewer -Property @{ VerticalScrollBarVisibility = 'Auto'; Margin = New-Object System.Windows.Thickness(16) }
         $sp2 = New-Object System.Windows.Controls.StackPanel

@@ -1,9 +1,9 @@
 ﻿# Excel Master Updater — Documentation / Dokumentacja / Dokumentation
 
 Choose language / Wybierz język / Sprache auswählen:
-- 🇬🇧 **[English User Guide](#excel-master-updater--english-user-guide)** (or standalone file: [USER_GUIDE_EN.md](file:///D:/Skrypty/Mnich_Adam_Skrypty/!Daily/UpdateExcelBaseFileProject/Docs/USER_GUIDE_EN.md))
-- 🇵🇱 **[Polska Instrukcja Obsługi](#excel-master-updater--polska-instrukcja-obsługi)** (lub osobny plik: [USER_GUIDE_PL.md](file:///D:/Skrypty/Mnich_Adam_Skrypty/!Daily/UpdateExcelBaseFileProject/Docs/USER_GUIDE_PL.md))
-- 🇩🇪 **[Deutsches Benutzerhandbuch](#excel-master-updater--deutsches-benutzerhandbuch)** (oder eigenständige Datei: [USER_GUIDE_DE.md](file:///D:/Skrypty/Mnich_Adam_Skrypty/!Daily/UpdateExcelBaseFileProject/Docs/USER_GUIDE_DE.md))
+- 🇬🇧 **[English User Guide](#excel-master-updater--english-user-guide)** (or standalone file: [USER_GUIDE_EN.md](USER_GUIDE_EN.md))
+- 🇵🇱 **[Polska Instrukcja Obsługi](#excel-master-updater--polska-instrukcja-obsługi)** (lub osobny plik: [USER_GUIDE_PL.md](USER_GUIDE_PL.md))
+- 🇩🇪 **[Deutsches Benutzerhandbuch](#excel-master-updater--deutsches-benutzerhandbuch)** (oder eigenständige Datei: [USER_GUIDE_DE.md](USER_GUIDE_DE.md))
 
 ---
 
@@ -136,7 +136,61 @@ For changed records, the detail pane presents every modified field in a side-by-
 
 ---
 
-## 4. Settings & Metadata Configuration
+## 4. Column Merge Modes & Comparison Options
+
+The application includes an advanced data transformation and normalization engine designed to reconcile structural differences across ERP exports, school registers, and HR spreadsheets.
+
+### Column Mapping Merge Modes
+
+Each mapping rule in the table operates in one of three configurable merge modes:
+
+1. **Exact (1:1)**:
+   - Direct 1-to-1 mapping from a single incoming column to a single base column.
+   - Triggers a change recommendation whenever the incoming value differs from the current base value.
+
+2. **FirstNonEmpty (N:1)**:
+   - Provides fallback coalescing across multiple candidate incoming columns.
+   - Enables selecting several source columns (e.g. `MobilePhone`, `HomePhone`, `WorkPhone`).
+   - The target base column is populated with the value from the first column that contains non-blank text.
+
+3. **Concatenate (N:1 and 1:N)**:
+   - **N:1 Joining (Multiple incoming columns into one base column)**:
+     - Joins multiple source fields (e.g. `StreetAddress` + `PostalCode` + `City`) into a unified base column `FullAddress` using a configurable delimiter (e.g. `, ` or space).
+   - **1:N Splitting (One incoming column across multiple base columns)**:
+     - When incoming files combine address and city into a single string (e.g. `10 High Street, London`), but the base file stores them in separate columns (`Address` and `City`), the engine splits the incoming text according to the specified delimiter.
+   - **Composite Equality (Zero False Positives)**:
+     - Before flagging differences, the comparison engine verifies composite equality. If joining the base columns reproduces the incoming combined text, the row is marked as `Unchanged` with zero false change warnings.
+
+---
+
+### Comparison & Text Normalization Options
+
+The mapping table header provides 4 independent normalization switches:
+
+| Option | Behavior | Example |
+|---|---|---|
+| **Ignore Case** | Evaluates uppercase and lowercase strings as equal. | `"LONDON"` == `"London"` |
+| **Trim Whitespace** | Strips leading and trailing spaces prior to comparison. | `" John "` == `"John"` |
+| **Ignore Punctuation & Special Chars** | Compares alphanumeric content while ignoring dots, commas, hyphens, and slashes. | `"St. John St-10"` == `"St John St 10"` |
+| **Ignore Internal Whitespace** | Collapses consecutive spaces, tabs, and line breaks into a single space before comparison. | `"Smith   John"` == `"Smith John"` |
+
+---
+
+### Smart Auto-Mapping Heuristics
+
+Clicking **⚡ Auto Map** invokes a multi-tiered heuristic engine:
+1. **Exact & Case-Insensitive Matching**: Matches identical column headers.
+2. **Smart Fuzzy Stem Matching**:
+   - Strips punctuation and matches header word stems (requiring >= 50% stem overlap).
+   - Tolerates common typos (e.g. `pywyżej` ➔ `powyżej`) and ERP abbreviations (e.g. `niepełn.` ➔ `niepełno.`, `Adres zakładu pracy` ➔ `Adres Pracy`).
+3. **Automatic Split Address & City Detection**:
+   - When the base file contains separate columns for address and city while incoming data has a single combined address column, Auto-Map automatically configures a **Concatenate** rule with `, ` separator.
+4. **SHA-256 Fingerprint Profiles**:
+   - The column mapping configuration is remembered and automatically reapplied on future imports of matching header layouts.
+
+---
+
+## 5. Settings & Metadata Configuration
 
 Click **⚙ Settings** in the top toolbar to configure:
 
@@ -164,7 +218,7 @@ Configures dynamic audit columns stamped on every accepted write:
 
 ---
 
-## 5. Emergency Recovery & Restore
+## 6. Emergency Recovery & Restore
 
 ### Restore from Backup Toolbar Action
 If an erroneous write occurs:
@@ -180,7 +234,7 @@ If a power interruption or system crash occurs during writing:
 
 ---
 
-## 6. Backups and Audit Logs Location
+## 7. Backups and Audit Logs Location
 
 ### Where are the Backup Files Saved?
 - **Folder Location**: Stored in the `Backups/` directory located directly inside the application installation folder (e.g. `UpdateExcelBaseFileProject\Backups\`).
@@ -203,9 +257,9 @@ If a power interruption or system crash occurs during writing:
 
 ---
 
-## 7. Tooltips, Shortcuts & In-App Help
+## 8. Tooltips, Shortcuts & In-App Help
 
-- **Interactive In-App Help**: Press **`F1`** at any time or click **❓ Help** in the top toolbar to open the interactive help dialog with full workflow guides, folder shortcuts, and keyboard references.
+- **Interactive In-App Help**: Press **`F1`** at any time or click **❓ Help** in the top toolbar to open the interactive help dialog with full workflow guides, merge modes, comparison options, folder shortcuts, and keyboard references.
 - **Comprehensive Tooltips**: Hover over any button, input card, dropdown, or table control to view a descriptive tooltip explaining its action and associated keyboard shortcuts.
 - **Multi-Language Support**: All tooltips, help screens, and user guides are fully localized in **English**, **Polish (Polski)**, and **German (Deutsch)**.
 
@@ -340,7 +394,61 @@ W przypadku rekordów zmienionych w panelu szczegółów wyświetlane są wszyst
 
 ---
 
-## 4. Ustawienia i kolumny metadanych
+## 4. Tryby scalania (Merge Modes) i opcje porównywania
+
+Aplikacja oferuje zaawansowany silnik transformacji i porównywania danych, dostosowany do różnic w strukturze plików ERP, arkuszy szkolnych oraz systemów kadrowo-płacowych.
+
+### Tryby scalania kolumn (Merge Modes)
+
+Każda reguła w tabeli mapowania posiada konfigurowalny tryb scalania:
+
+1. **Dokładne (Exact, 1:1)**:
+   - Bezpośrednie przeniesienie wartości z jednej kolumny źródłowej do jednej kolumny bazy.
+   - Gdy wartość w pliku zmian różni się od wartości w bazie, generowana jest propozycja modyfikacji komórki.
+
+2. **Pierwsze niepuste (FirstNonEmpty, N:1)**:
+   - Obsługuje logikę zastępczą (fallback coalescing).
+   - Pozwala wybrać kilka potencjalnych kolumn źródłowych (np. `TelefonKomorkowy`, `TelefonDomowy`, `TelefonKontaktowy`).
+   - Wartość pobierana jest z pierwszej wskazanej kolumny, która zawiera niepusty ciąg znaków.
+
+3. **Połącz (Concatenate, N:1 oraz 1:N)**:
+   - **Scalanie wielu kolumn źródłowych do jednej kolumny bazy (N:1)**:
+     - Pozwala połączyć np. `UlicaINumer` + `KodPocztowy` + `Miejscowosc` w jedno pole bazy `AdresPelny` z wybranym separatorem (domyślnie `, ` lub spacja).
+   - **Podział jednej kolumny źródłowej na wiele kolumn bazy (1:N)**:
+     - Gdy plik zmian zawiera pełny adres w jednym polu (np. `Polna 12, 00-001 Warszawa`), a baza przechowuje go w osobnych kolumnach (`Adres` oraz `Miasto`), aplikacja inteligentnie rozdziela wartości według zadanego separatora.
+   - **Dwukierunkowa eliminacja fałszywych różnic (Composite Equality)**:
+     - Przed wygenerowaniem zmiany silnik weryfikuje równość kompozytową. Jeśli połączone kolumny bazy (`Adres` + `Miasto`) po złączeniu dają dokładnie taki sam ciąg jak scalona kolumna źródłowa, wiersz jest automatycznie uznawany za identyczny (`Bez zmian`).
+
+---
+
+### Opcje porównywania i normalizacji tekstu
+
+W nagłówku tabeli mapowania dostępne są 4 niezależne przełączniki normalizacji:
+
+| Opcja | Działanie | Przykład |
+|---|---|---|
+| **Ignoruj wielkość liter** (*Ignore Case*) | Zrównuje małe i wielkie litery podczas porównywania. | `"WARSZAWA"` == `"Warszawa"` |
+| **Usuwaj spacje krawędziowe** (*Trim Whitespace*) | Usuwa zbędne spacje wiodące i końcowe przed oceną równości. | `" Jan "` == `"Jan"` |
+| **Ignoruj interpunkcję i znaki specjalne** (*Ignore Punctuation*) | Pomija kropki, przecinki, myślniki, ukośniki itp. | `"ul. Polna 5/2"` == `"ul Polna 5-2"` |
+| **Ignoruj białe znaki wewnątrz** (*Ignore Internal Whitespace*) | Sprowadza wielokrotne spacje, tabulatory i znaki nowej linii do pojedynczej spacji. | `"Kowalski   Jan"` == `"Kowalski Jan"` |
+
+---
+
+### Inteligentne reguły automatycznego mapowania (Smart Auto-Map)
+
+Kliknięcie przycisku **⚡ Automatyczne mapowanie** uruchamia wieloetapowy algorytm heurystyczny:
+1. **Dopasowanie dokładne**: Kojarzy kolumny o identycznych nazwach nagłówków (z tolerancją wielkości liter).
+2. **Rozmyte dopasowanie rdzeni słów (Fuzzy Stem Matching)**:
+   - Usuwa znaki interpunkcyjne i dzieli nagłówki na słowa kluczowe.
+   - Automatycznie kojarzy nagłówki z literówkami (np. `pywyżej / ponieżej` ➔ `powyżej / poniżej`) oraz powszechnymi skrótami ERP (np. `niepełn.` ➔ `niepełno.`, `Adres zakładu pracy` ➔ `Adres Pracy`).
+3. **Automatyczne wykrywanie scalania adresu i miasta**:
+   - Gdy plik bazy posiada oddzielne kolumny dla ulicy i miasta (np. `Adres zamieszkania` oraz `Miasto Zamieszkania`), a plik zmian posiada tylko jedną połączoną kolumnę adresu, Auto-Map samoczynnie konfiguruje regułę **Połącz (Concatenate)** z separatorem `, `.
+4. **Odcisk szablonu SHA-256**:
+   - Po pierwszym dostosowaniu mapowania profil zapisuje się na dysku. Przy kolejnym otwarciu pliku o takich samych nagłówkach cały układ reguł wczytuje się natychmiast bez udziału użytkownika.
+
+---
+
+## 5. Ustawienia i kolumny metadanych
 
 Kliknij przycisk **⚙ Ustawienia** na górnym pasku narzędzi, aby skonfigurować parametry pracy:
 
@@ -368,7 +476,7 @@ Konfiguruje automatyczne stemple audytowe nanoszone na każdy zapisany wiersz:
 
 ---
 
-## 5. Procedura awaryjna i przywracanie
+## 6. Procedura awaryjna i przywracanie
 
 ### Przywracanie kopii z paska narzędzi
 W przypadku omyłkowego zatwierdzenia niepożądanych zmian:
@@ -383,7 +491,7 @@ Przy kolejnym uruchomieniu aplikacja wykrywa ewentualne osierocone pliki tymczas
 
 ---
 
-## 6. Lokalizacja kopii zapasowych i logów
+## 7. Lokalizacja kopii zapasowych i logów
 
 ### Gdzie zapisywane są kopie zapasowe?
 - **Lokalizacja folderu**: Katalog `Backups/` bezpośrednio w folderze aplikacji (np. `UpdateExcelBaseFileProject\Backups\`).
@@ -406,9 +514,9 @@ Przy kolejnym uruchomieniu aplikacja wykrywa ewentualne osierocone pliki tymczas
 
 ---
 
-## 7. Podpowiedzi, skróty i pomoc w aplikacji
+## 8. Podpowiedzi, skróty i pomoc w aplikacji
 
-- **Interaktywna pomoc w aplikacji**: Wciśnij klawisz **`F1`** w dowolnym momencie lub kliknij przycisk **❓ Pomoc** na górnym pasku narzędzi, aby otworzyć okno pomocy z kartami objaśniającymi procedurę, lokalizację plików i listę skrótów.
+- **Interaktywna pomoc w aplikacji**: Wciśnij klawisz **`F1`** w dowolnym momencie lub kliknij przycisk **❓ Pomoc** na górnym pasku narzędzi, aby otworzyć okno pomocy z kartami objaśniającymi procedurę, tryby scalania, opcje porównywania, lokalizację plików i listę skrótów.
 - **Opisowe dymki pomocy (tooltips)**: Najedź kursorem myszy na dowolny przycisk, pole edycyjne lub nagłówek, aby zobaczyć szczegółowe objaśnienie działania danej funkcji.
 - **Wsparcie wielojęzyczne**: Cały interfejs, komunikaty, dymki pomocy oraz dokumentacja dostępne są w językach: **polskim (Polski)**, **angielskim (English)** oraz **niemieckim (Deutsch)**.
 
@@ -543,7 +651,61 @@ Bei geänderten Datensätzen zeigt der Detailbereich alle abweichenden Felder ne
 
 ---
 
-## 4. Einstellungen und Metadatenspalten
+## 4. Zusammenführungsmodi (Merge Modes) und Vergleichsoptionen
+
+Die Anwendung bietet eine leistungsfähige Transformations- und Normalisierungs-Engine zum zuverlässigen Abgleich abweichender Datenstrukturen aus ERP-Exporten, Schulverwaltungssystemen und Personaldateien.
+
+### Spalten-Zusammenführungsmodi (Merge Modes)
+
+Jede Zuordnungsregel unterstützt drei konfigurierbare Zusammenführungsmodi:
+
+1. **Exakt (Exact, 1:1)**:
+   - Direkte 1-zu-1-Übertragung aus einer Quellspalte in eine Basisspalte.
+   - Löst einen Änderungsvorschlag aus, sobald der Quellwert vom aktuellen Basiswert abweicht.
+
+2. **Erstes nicht-leeres (FirstNonEmpty, N:1)**:
+   - Realisiert eine Ausweichlogik (Fallback-Coalescing) über mehrere Quellspalten.
+   - Ermöglicht die Auswahl mehrerer Spalten (z. B. `Mobiltelefon`, `Festnetz`, `Diensttelefon`).
+   - Übernimmt den Wert der ersten Quellspalte, die nicht leer ist.
+
+3. **Zusammenführen (Concatenate, N:1 und 1:N)**:
+   - **N:1-Zusammenführung (Mehrere Quellspalten in eine Basisspalte)**:
+     - Verbindet Felder wie `StrasseHausnummer` + `Postleitzahl` + `Ort` zu einer Basisspalte `VollstaendigeAdresse` mit frei wählbarem Trennzeichen (z. B. `, ` oder Leerzeichen).
+   - **1:N-Aufteilung (Eine Quellspalte auf mehrere Basisspalten)**:
+     - Liefert die Quelldatei eine kombinierte Adresse (z. B. `Musterstrasse 1, 10115 Berlin`), die Basisdatei jedoch separate Spalten (`Adresse` und `Stadt`), teilt das System den Wert anhand des Trennzeichens auf.
+   - **Zusammengesetzte Gleichheitsprüfung (Composite Equality)**:
+     - Vor dem Auslösen von Differenzen prüft die Engine, ob die kombinierten Basisspalten dem zusammengeführten Quelltext entsprechen. Ist dies der Fall, wird der Datensatz als `Unverändert` eingestuft (keine Scheinunterschiede).
+
+---
+
+### Vergleichs- und Textnormalisierungsoptionen
+
+In der Kopfzeile der Zuordnungstabelle stehen 4 Normalisierungsoptionen zur Verfügung:
+
+| Option | Wirkung | Beispiel |
+|---|---|---|
+| **Groß-/Kleinschreibung ignorieren** (*Ignore Case*) | Behandelt Groß- und Kleinbuchstaben als identisch. | `"BERLIN"` == `"Berlin"` |
+| **Randleerzeichen kürzen** (*Trim Whitespace*) | Entfernt führende und nachgestellte Leerzeichen vor dem Vergleich. | `" Hans "` == `"Hans"` |
+| **Satzzeichen & Sonderzeichen ignorieren** (*Ignore Punctuation*) | Vergleicht alphanumerische Zeichen unter Auslassung von Punkten, Kommas, Bindestrichen usw. | `"Hauptstr. 5/2"` == `"Hauptstr 5-2"` |
+| **Interne Leerzeichen ignorieren** (*Ignore Internal Whitespace*) | Fasst mehrfache Leerzeichen, Tabulatoren und Zeilenumbrüche zu einem Einzelleerzeichen zusammen. | `"Müller   Hans"` == `"Müller Hans"` |
+
+---
+
+### Intelligente Auto-Zuordnungsregeln (Smart Auto-Map)
+
+Ein Klick auf **⚡ Auto-Zuordnung** aktiviert einen mehrstufigen Heuristik-Algorithmus:
+1. **Exakte und schreibungsunabhängige Zuordnung**: Ordnet Spalten mit identischen Namen direkt zu.
+2. **Unscharfe Wortstamm-Erkennung (Fuzzy Stem Matching)**:
+   - Entfernt Satzzeichen und vergleicht Wortstämme (Mindestüberdeckung 50 %).
+   - Toleriert gängige Tippfehler (z. B. `pywyżej` ➔ `powyżej`) sowie ERP-Abkürzungen (z. B. `niepełn.` ➔ `niepełno.`, `Adres zakładu pracy` ➔ `Adres Pracy`).
+3. **Automatische Erkennung kombinierter Adress- und Stadtspalten**:
+   - Sind in der Basisdatei Adresse und Stadt getrennt, in der Änderungsdatei jedoch kombiniert, richtet die Auto-Zuordnung automatisch eine **Zusammenführen (Concatenate)**-Regel mit Trennzeichen `, ` ein.
+4. **SHA-256-Vorlagen-Fingerabdruck**:
+   - Die Zuordnung wird gespeichert und bei zukünftigen Importen identischer Kopfzeilenlayouts automatisch wiederhergestellt.
+
+---
+
+## 5. Einstellungen und Metadatenspalten
 
 Klicken Sie in der oberen Symbolleiste auf **⚙ Einstellungen**, um Optionen anzupassen:
 
@@ -571,7 +733,7 @@ Legt die automatischen Revisionsstempel fest, die in jede aktualisierte Zeile ge
 
 ---
 
-## 5. Notfallwiederherstellung & Restore
+## 6. Notfallwiederherstellung & Restore
 
 ### Wiederherstellung über die Symbolleiste
 Sollte versehentlich ein unerwünschter Schreibvorgang bestätigt worden sein:
@@ -586,7 +748,7 @@ Beim nächsten Start erkennt die Anwendung verwaiste Zwischendateien automatisch
 
 ---
 
-## 6. Speicherorte für Sicherungen und Protokolle
+## 7. Speicherorte für Sicherungen und Protokolle
 
 ### Wo werden Sicherungskopien gespeichert?
 - **Ordnerpfad**: Ordner `Backups/` direkt im Installationsverzeichnis der Anwendung (z. B. `UpdateExcelBaseFileProject\Backups\`).
@@ -609,9 +771,8 @@ Beim nächsten Start erkennt die Anwendung verwaiste Zwischendateien automatisch
 
 ---
 
-## 7. QuickInfo-Texte, Tastaturkürzel und In-App-Hilfe
+## 8. QuickInfo-Texte, Tastaturkürzel und In-App-Hilfe
 
-- **Interaktive Hilfe in der Anwendung**: Drücken Sie jederzeit **`F1`** oder klicken Sie in der Symbolleiste auf **❓ Hilfe**, um das Hilfefenster mit Workflow-Karten, Verzeichnis-Schaltflächen und Tastaturkürzeln zu öffnen.
+- **Interaktive Hilfe in der Anwendung**: Drücken Sie jederzeit **`F1`** oder klicken Sie in der Symbolleiste auf **❓ Hilfe**, um das Hilfefenster mit Workflow-Karten, Zusammenführungsmodi, Vergleichsoptionen, Verzeichnis-Schaltflächen und Tastaturkürzeln zu öffnen.
 - **Detaillierte QuickInfo-Texte (Tooltips)**: Bewegen Sie die Maus über eine beliebige Schaltfläche oder ein Eingabefeld, um eine präzise Erklärung der Funktionsweise und zugehörige Tastenkürzel einzublenden.
 - **Dreisprachigkeit**: Die gesamte Oberfläche, Dialoge, Meldungen und Handbücher sind vollständig auf **Deutsch**, **Englisch** und **Polnisch** verfügbar.
-

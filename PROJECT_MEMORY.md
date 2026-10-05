@@ -45,11 +45,11 @@ Excel Master Updater provides:
 
 ```
 \ExcelMasterUpdater\
-├── Master-Updater.ps1        # Monolithic production script (Regions 1-10, ~7,300 lines)
-├── Master-Updater.exe        # Compiled standalone binary (PS2EXE)
+├── Master-Updater.ps1        # Monolithic production script (Regions 1-10, ~9,100 lines)
+├── Master-Updater.exe        # Compiled standalone binary (PS2EXE, 771 KB)
 ├── start.ps1                 # Universal launcher (dual PS5.1/PS7 engine & parameter forwarder)
 ├── Build-Exe.ps1             # Automated compilation script utilizing PS2EXE
-├── language.json             # Trilingual catalog (EN, PL, DE — 281 keys per language)
+├── language.json             # Trilingual catalog (EN, PL, DE — 320 keys per language)
 ├── config.json               # Application runtime preferences & persistence
 ├── PROJECT_MEMORY.md         # This technical specification and memory file
 ├── Docs\                     # Documentation suite
@@ -61,19 +61,25 @@ Excel Master Updater provides:
 ├── Backups\                  # Automated pre-write backup store (<BaseName>.<Timestamp>.bak.xlsx)
 ├── Logs\                     # JSONL and formatted text execution audit trails
 ├── Profiles\                 # Saved column mapping profiles (JSON v2.0 format)
-└── Tests\                    # Comprehensive automated test suite (12 test files)
-    ├── Test-Localization.ps1          # 100% trilingual key completeness (281 keys) & Get-UiString coverage
-    ├── Test-DataMappingPreview.ps1     # Live mapping results preview, sample row grids, row navigation
-    ├── Test-CompareEngine.ps1          # Join keys, composite keys, status classifications
-    ├── Test-EditExcelHelper.ps1        # OpenXML InPlace patching & row appending
-    ├── Test-HeadlessAndWatcher.ps1     # CLI automation, non-interactive batch runs
-    ├── Test-NegativePath.ps1           # Corrupted files, missing sheets, invalid keys
-    ├── Test-SampleFilesIntegration.ps1 # Real-world fixtures (Students, Grades, Attendance)
-    ├── Test-UIComponents.ps1           # WPF XAML element tree & control instantiation
-    ├── Test-UnchangedOption.ps1        # Show/hide unchanged records & review filters
-    ├── Test-BaseSheetLogging.ps1       # In-workbook ImportLog audit sheet generation & PII
-    ├── Test-E2E-MasterUpdater.ps1      # End-to-end full reconciliation and write-back cycle
-    └── Test-DeepVerification.ps1       # Extreme multi-sheet, formula, and UTF-8 verification
+└── Tests\                    # Comprehensive automated test suite (18 test files)
+    ├── Test-Localization.ps1              # 100% trilingual key completeness (320 keys) & Get-UiString coverage (432 calls)
+    ├── Test-QoLSelectiveReconciliation.ps1 # Diff policies, selective field takeover, inline editing, revert & new file write
+    ├── Test-RealUserFilesDDOIntegration.ps1# Real-world student admission file reconciliation (DDO 2 dataset)
+    ├── Test-NewUXAndResilienceFeatures.ps1 # Mapping search filter, ANSI/CP1250 encoding, join key badges
+    ├── Test-DataMappingPreview.ps1         # Live mapping results preview, sample row grids, row navigation
+    ├── Test-GridSplitterBehavior.ps1       # Interactive UI resizing and splitter stability
+    ├── Test-ConcatenateMappingRule.ps1     # Multi-column concatenation & delimiter handling
+    ├── Test-CompareOptions.ps1             # Case sensitivity, whitespace, and diacritics options
+    ├── Test-CompareEngine.ps1              # Join keys, composite keys, status classifications
+    ├── Test-EditExcelHelper.ps1            # OpenXML InPlace patching & row appending
+    ├── Test-HeadlessAndWatcher.ps1         # CLI automation, non-interactive batch runs
+    ├── Test-NegativePath.ps1               # Corrupted files, missing sheets, invalid keys
+    ├── Test-SampleFilesIntegration.ps1     # Real-world fixtures (Students, Grades, Attendance)
+    ├── Test-UIComponents.ps1               # WPF XAML element tree & control instantiation
+    ├── Test-UnchangedOption.ps1            # Show/hide unchanged records & review filters
+    ├── Test-BaseSheetLogging.ps1           # In-workbook ImportLog audit sheet generation & PII
+    ├── Test-E2E-MasterUpdater.ps1          # End-to-end full reconciliation and write-back cycle
+    └── Test-DeepVerification.ps1           # Extreme multi-sheet, formula, and UTF-8 verification
 ```
 
 ---
@@ -128,6 +134,11 @@ Compiles low-overhead C# helper classes directly into the runtime memory via `Ad
   - **`Unchanged`**: Join key matched; all mapped fields are identical under configured normalization.
   - **`Ambiguous`**: Join key is null/empty, duplicated in the incoming source, or matches multiple base records. Requires manual operator resolution.
   - **`Removed`**: Base row is missing from the incoming source (when `DetectRemovedRows = $true`).
+- **Diff Policy Engine (`DiffPolicy`)**:
+  - `TrackChanges` (Default): Standard cell difference tracking for critical attributes (phone, address, car, class).
+  - `IgnoreChanges`: Bypasses cell diff generation for existing matched records (suppressing unimportant changes), while keeping projected values for new rows.
+  - `NormalizePostalCode`: Neutralizes postal codes (`\b\d{2}-\d{3}\b|\b\d{5}\b`) in city fields before comparison.
+  - `FuzzyContainment`: Evaluates bidirectional substring containment (e.g. school name suffix `"w Gliwicach"`), ignoring benign naming extensions.
 
 ### Region 6: Metadata Stamping Engine
 - Handled by `Get-StampedMetadataValue`.
@@ -166,6 +177,13 @@ Compiles low-overhead C# helper classes directly into the runtime memory via `Ad
   - **High-Performance Sample Caching**: Fast preview sampling reads only the first 10 rows via `[FastExcelHelper]::ReadSheet($path, $sheet, 10)` in ~11 ms without loading the full workbook into memory.
   - **Sample Row Navigation**: Interactive `◀ Prev Row` and `Next Row ▶` buttons to cycle through sample rows 1 to 10 with live row indicator text (`txtPreviewInfo`).
   - **Automatic Refresh Hooks**: Automatically recalculates preview on file loading, sheet selection change, auto-mapping, manual rule additions/deletions, profile loading, and tab selection.
+- **QoL Selective Field Takeover & Inline Card Editing**:
+  - **Save as New File (`btnApplyToNewFile`)**: Dedicated action bar button (`💾 Save as New File...`) allowing operators to export all accepted and inline-edited updates directly into a brand new Excel or CSV file without modifying the original master base file.
+  - **Direct Inline Card Editing (`txtEditNew`)**: Proposed values can be typed into directly on the review card, setting `$chg.CustomEdited = $true` and updating live staging metrics.
+  - **Instant Revert (`↺` / `btnRevert`)**: Restores original proposed file value and clears dirty flags.
+  - **Row Tools**: Dedicated `Select All Fields` and `Deselect All Fields` buttons above the diff table for one-click field management on the active record.
+  - **Batch Column Toggles (`wrapBatchColToggles`)**: Dynamic column chips to toggle a specific field across all accepted rows session-wide.
+  - **Live Staging Summary (`txtStagingSummary`)**: Real-time counter showing `[X staged changes across Y rows (Z skipped)]`.
 - **Theme Switching**: On-the-fly toggling between `Dark` (charcoal/slate) and `Light` (clean corporate) palettes without reloading.
 - **Keyboard Shortcuts**:
   - `A`: Accept record and advance.
@@ -175,7 +193,6 @@ Compiles low-overhead C# helper classes directly into the runtime memory via `Ad
   - `B` / `Left Arrow` / `Backspace`: Go to previous record.
   - `Ctrl + Z`: Undo last decision.
   - `F1`: Open trilingual interactive Help dialog.
-- **Interactive Review Card**: Displays side-by-side diff with per-cell checkboxes, allowing selective field application.
 
 ### Region 10: Headless & Batch Mode
 - Handled by `Invoke-HeadlessMasterUpdater`.
@@ -392,3 +409,28 @@ The test suite provides comprehensive coverage across the entire engine and GUI 
   2. In `Invoke-MasterCompare`, for any rule configured with `MergeMode = 'Concatenate'` and multiple columns on either side, evaluate overall merged equality first via `[FastDiffHelper]::MergeValues` and `[FastDiffHelper]::AreEqual`. If merged strings are equal, bypass individual column diffs to avoid false positives.
   3. In `Get-ProjectedRow`, automatically split incoming values across multiple base columns when `MergeMode = 'Concatenate'` and `Separator` is specified (e.g. `", "`), ensuring cell write-back accurately updates each individual base cell.
   4. Provide both "+ Add Rule" and "Edit Rule" capabilities (including double-click on `gridMappingRules`) with live preview cards displaying formatted Concatenate combinations.
+
+### 14. Comparison Mode Flags & Scope-Safe Dynamic Localization Dispatch
+- **Gotcha**:
+  1. Comparing text data without flexible matching flags causes false discrepancies due to case differences, leading/trailing whitespace, punctuation differences (e.g. `.` vs `,` in addresses), or multi-spaces.
+  2. In WPF PowerShell applications under `Set-StrictMode`, event callbacks (such as language selection changes or button clicks) execute outside the local scope of `Show-MasterUpdater`. Accessing local control variables directly or invoking `$ApplyTheme` / `$UpdateLocalization` throws `PropertyNotFoundException: The variable '$chkTrimWhitespace' cannot be retrieved because it has not been set` or `The property 'Background' cannot be found on this object`.
+- **Rule**:
+  1. Expose 4 comparison checkboxes matching `Compare-ExcelFiles`:
+     - *Ignore case when comparing* (`chkIgnoreCase`)
+     - *Trim whitespace before comparing* (`chkTrimWhitespace`)
+     - *Ignore punctuation & special characters* (`chkIgnoreSpecialChars`)
+     - *Ignore internal whitespace differences* (`chkIgnoreAllSpaces`)
+  2. Implement high-performance matching in `[FastDiffHelper]::AreEqual` using compiled regular expressions (`_rgxSpecial = [^\p{L}\p{Nd}\s]` and `_rgxWhitespace = \s+`).
+  3. Scope shared UI elements to `$script:` (e.g. `$script:chkIgnoreCase`, `$script:chkTrimWhitespace`, etc.) and resolve dynamic UI elements in `$UpdateLocalization` and `$ApplyTheme` safely through `$w.FindName($name)` with null-guards and error handling.
+  4. Persist and restore comparison mode options in mapping profiles (`ProfileStore`) and `AppConfig`, while immediately triggering live preview recalculation (`& $script:UpdateDataMappingPreview`) upon any checkbox toggle.
+
+### 15. Trilingual In-App Help System & Smart Auto-Mapping Heuristics
+- **Gotcha**:
+  1. Users and operators often struggle with complex column relationships (e.g. `Exact` vs `FirstNonEmpty` vs `Concatenate`) without context-rich in-app documentation.
+  2. ERP file exports frequently contain subtle header typos (`pywyżej/ ponieżej`) or minor abbreviations (`niepełn.`), causing standard exact-string AutoMap to fail and leave columns unmapped.
+  3. Real-world files often split address and city into two columns in the base database while providing a single combined address in monthly change files.
+- **Rule**:
+  1. Maintain a dedicated 4th tab (`HelpTabMergeModes`) in `ShowHelpDialog` (F1) explaining Merge Modes, 4 Comparison Options, and Smart Auto-Mapping heuristics across English, Polish, and German.
+  2. In `Invoke-AutoMapRules`, implement `Find-SmartHeaderMatch` using punctuation stripping and fuzzy word-stem matching (>= 50% overlap) to automatically link misspelled or abbreviated ERP headers.
+  3. In `Invoke-AutoMapRules`, detect when Base has separate Address and City columns while Incoming has a single combined Address; automatically generate a `Concatenate` rule with `, ` separator.
+  4. Ensure 100% key and text parity in `language.json` (307 keys) and all standalone guides (`USER_GUIDE_PL.md`, `USER_GUIDE_EN.md`, `USER_GUIDE_DE.md`, `USER_GUIDE.md`) with UTF-8 BOM encoding.

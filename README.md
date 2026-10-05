@@ -104,15 +104,19 @@ ExcelMasterUpdater/
 └── Tests/                          # Automated test suites (Dual PS 5.1 & PS 7)
     ├── Test-BaseSheetLogging.ps1           # Audit worksheet writing and column sanity
     ├── Test-CompareEngine.ps1              # Comparison, projection, ambiguous & removed detection
+    ├── Test-CompareOptions.ps1             # Case sensitivity, whitespace, and diacritics options
+    ├── Test-ConcatenateMappingRule.ps1     # Multi-column concatenation & delimiter handling
     ├── Test-DataMappingPreview.ps1         # Live sample projection and status badges
     ├── Test-DeepVerification.ps1           # Deep integrity and edge case checks
     ├── Test-E2E-MasterUpdater.ps1          # Complete end-to-end integration test
     ├── Test-EditExcelHelper.ps1            # InPlace XML patching & row appending
     ├── Test-GridSplitterBehavior.ps1       # UI splitter layout and persistence
     ├── Test-HeadlessAndWatcher.ps1         # Headless batch, HTML reporting, and folder watcher
-    ├── Test-Localization.ps1               # 100% key completeness across PL / EN / DE (283 keys)
+    ├── Test-Localization.ps1               # 100% key completeness across PL / EN / DE (320 keys)
     ├── Test-NegativePath.ps1               # Fuzz & negative-path tests (corrupt ZIP, locks)
     ├── Test-NewUXAndResilienceFeatures.ps1 # Tab 1 search, double-click, CSV pipe & Win-1250
+    ├── Test-QoLSelectiveReconciliation.ps1 # Diff policies, selective field takeover, inline editing & revert
+    ├── Test-RealUserFilesDDOIntegration.ps1# Real-world student admission file reconciliation (DDO 2 dataset)
     ├── Test-SampleFilesIntegration.ps1     # Multi-format integration tests
     ├── Test-UIComponents.ps1               # Automated XAML UI & non-interactive launch
     └── Test-UnchangedOption.ps1            # Show unchanged toggle and filtering

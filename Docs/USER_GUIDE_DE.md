@@ -127,7 +127,61 @@ Bei geänderten Datensätzen zeigt der Detailbereich alle abweichenden Felder ne
 
 ---
 
-## 4. Einstellungen und Metadatenspalten
+## 4. Zusammenführungsmodi (Merge Modes) und Vergleichsoptionen
+
+Die Anwendung bietet eine leistungsfähige Transformations- und Normalisierungs-Engine zum zuverlässigen Abgleich abweichender Datenstrukturen aus ERP-Exporten, Schulverwaltungssystemen und Personaldateien.
+
+### Spalten-Zusammenführungsmodi (Merge Modes)
+
+Jede Zuordnungsregel unterstützt drei konfigurierbare Zusammenführungsmodi:
+
+1. **Exakt (Exact, 1:1)**:
+   - Direkte 1-zu-1-Übertragung aus einer Quellspalte in eine Basisspalte.
+   - Löst einen Änderungsvorschlag aus, sobald der Quellwert vom aktuellen Basiswert abweicht.
+
+2. **Erstes nicht-leeres (FirstNonEmpty, N:1)**:
+   - Realisiert eine Ausweichlogik (Fallback-Coalescing) über mehrere Quellspalten.
+   - Ermöglicht die Auswahl mehrerer Spalten (z. B. `Mobiltelefon`, `Festnetz`, `Diensttelefon`).
+   - Übernimmt den Wert der ersten Quellspalte, die nicht leer ist.
+
+3. **Zusammenführen (Concatenate, N:1 und 1:N)**:
+   - **N:1-Zusammenführung (Mehrere Quellspalten in eine Basisspalte)**:
+     - Verbindet Felder wie `StrasseHausnummer` + `Postleitzahl` + `Ort` zu einer Basisspalte `VollstaendigeAdresse` mit frei wählbarem Trennzeichen (z. B. `, ` oder Leerzeichen).
+   - **1:N-Aufteilung (Eine Quellspalte auf mehrere Basisspalten)**:
+     - Liefert die Quelldatei eine kombinierte Adresse (z. B. `Musterstrasse 1, 10115 Berlin`), die Basisdatei jedoch separate Spalten (`Adresse` und `Stadt`), teilt das System den Wert anhand des Trennzeichens auf.
+   - **Zusammengesetzte Gleichheitsprüfung (Composite Equality)**:
+     - Vor dem Auslösen von Differenzen prüft die Engine, ob die kombinierten Basisspalten dem zusammengeführten Quelltext entsprechen. Ist dies der Fall, wird der Datensatz als `Unverändert` eingestuft (keine Scheinunterschiede).
+
+---
+
+### Vergleichs- und Textnormalisierungsoptionen
+
+In der Kopfzeile der Zuordnungstabelle stehen 4 Normalisierungsoptionen zur Verfügung:
+
+| Option | Wirkung | Beispiel |
+|---|---|---|
+| **Groß-/Kleinschreibung ignorieren** (*Ignore Case*) | Behandelt Groß- und Kleinbuchstaben als identisch. | `"BERLIN"` == `"Berlin"` |
+| **Randleerzeichen kürzen** (*Trim Whitespace*) | Entfernt führende und nachgestellte Leerzeichen vor dem Vergleich. | `" Hans "` == `"Hans"` |
+| **Satzzeichen & Sonderzeichen ignorieren** (*Ignore Punctuation*) | Vergleicht alphanumerische Zeichen unter Auslassung von Punkten, Kommas, Bindestrichen usw. | `"Hauptstr. 5/2"` == `"Hauptstr 5-2"` |
+| **Interne Leerzeichen ignorieren** (*Ignore Internal Whitespace*) | Fasst mehrfache Leerzeichen, Tabulatoren und Zeilenumbrüche zu einem Einzelleerzeichen zusammen. | `"Müller   Hans"` == `"Müller Hans"` |
+
+---
+
+### Intelligente Auto-Zuordnungsregeln (Smart Auto-Map)
+
+Ein Klick auf **⚡ Auto-Zuordnung** aktiviert einen mehrstufigen Heuristik-Algorithmus:
+1. **Exakte und schreibungsunabhängige Zuordnung**: Ordnet Spalten mit identischen Namen direkt zu.
+2. **Unscharfe Wortstamm-Erkennung (Fuzzy Stem Matching)**:
+   - Entfernt Satzzeichen und vergleicht Wortstämme (Mindestüberdeckung 50 %).
+   - Toleriert gängige Tippfehler (z. B. `pywyżej` ➔ `powyżej`) sowie ERP-Abkürzungen (z. B. `niepełn.` ➔ `niepełno.`, `Adres zakładu pracy` ➔ `Adres Pracy`).
+3. **Automatische Erkennung kombinierter Adress- und Stadtspalten**:
+   - Sind in der Basisdatei Adresse und Stadt getrennt, in der Änderungsdatei jedoch kombiniert, richtet die Auto-Zuordnung automatisch eine **Zusammenführen (Concatenate)**-Regel mit Trennzeichen `, ` ein.
+4. **SHA-256-Vorlagen-Fingerabdruck**:
+   - Die Zuordnung wird gespeichert und bei zukünftigen Importen identischer Kopfzeilenlayouts automatisch wiederhergestellt.
+
+---
+
+## 5. Einstellungen und Metadatenspalten
 
 Klicken Sie in der oberen Symbolleiste auf **⚙ Einstellungen**, um Optionen anzupassen:
 
@@ -155,7 +209,7 @@ Legt die automatischen Revisionsstempel fest, die in jede aktualisierte Zeile ge
 
 ---
 
-## 5. Notfallwiederherstellung & Restore
+## 6. Notfallwiederherstellung & Restore
 
 ### Wiederherstellung über die Symbolleiste
 Sollte versehentlich ein unerwünschter Schreibvorgang bestätigt worden sein:
@@ -170,7 +224,7 @@ Beim nächsten Start erkennt die Anwendung verwaiste Zwischendateien automatisch
 
 ---
 
-## 6. Speicherorte für Sicherungen und Protokolle
+## 7. Speicherorte für Sicherungen und Protokolle
 
 ### Wo werden Sicherungskopien gespeichert?
 - **Ordnerpfad**: Ordner `Backups/` direkt im Installationsverzeichnis der Anwendung (z. B. `UpdateExcelBaseFileProject\Backups\`).
@@ -193,8 +247,8 @@ Beim nächsten Start erkennt die Anwendung verwaiste Zwischendateien automatisch
 
 ---
 
-## 7. QuickInfo-Texte, Tastaturkürzel und In-App-Hilfe
+## 8. QuickInfo-Texte, Tastaturkürzel und In-App-Hilfe
 
-- **Interaktive Hilfe in der Anwendung**: Drücken Sie jederzeit **`F1`** oder klicken Sie in der Symbolleiste auf **❓ Hilfe**, um das Hilfefenster mit Workflow-Karten, Verzeichnis-Schaltflächen und Tastaturkürzeln zu öffnen.
+- **Interaktive Hilfe in der Anwendung**: Drücken Sie jederzeit **`F1`** oder klicken Sie in der Symbolleiste auf **❓ Hilfe**, um das Hilfefenster mit Workflow-Karten, Zusammenführungsmodi, Vergleichsoptionen, Verzeichnis-Schaltflächen und Tastaturkürzeln zu öffnen.
 - **Detaillierte QuickInfo-Texte (Tooltips)**: Bewegen Sie die Maus über eine beliebige Schaltfläche oder ein Eingabefeld, um eine präzise Erklärung der Funktionsweise und zugehörige Tastenkürzel einzublenden.
 - **Dreisprachigkeit**: Die gesamte Oberfläche, Dialoge, Meldungen und Handbücher sind vollständig auf **Deutsch**, **Englisch** und **Polnisch** verfügbar.
