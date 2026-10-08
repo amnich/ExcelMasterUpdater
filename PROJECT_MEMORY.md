@@ -61,7 +61,9 @@ Excel Master Updater provides:
 ├── Backups\                  # Automated pre-write backup store (<BaseName>.<Timestamp>.bak.xlsx)
 ├── Logs\                     # JSONL and formatted text execution audit trails
 ├── Profiles\                 # Saved column mapping profiles (JSON v2.0 format)
-└── Tests\                    # Comprehensive automated test suite (18 test files)
+└── Tests\                    # Comprehensive automated test suite (20 test files)
+    ├── Test-ProcessAcceptance.ps1         # Formal business process acceptance criteria (AC-1 to AC-6 end-to-end)
+    ├── Test-WpfGuiFlaUI.ps1               # Automated out-of-process FlaUI UIA3 GUI acceptance suite (GAC-1 to GAC-6)
     ├── Test-Localization.ps1              # 100% trilingual key completeness (320 keys) & Get-UiString coverage (432 calls)
     ├── Test-QoLSelectiveReconciliation.ps1 # Diff policies, selective field takeover, inline editing, revert & new file write
     ├── Test-RealUserFilesDDOIntegration.ps1# Real-world student admission file reconciliation (DDO 2 dataset)
