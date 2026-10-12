@@ -52,7 +52,7 @@ if (-not $OutputFile) {
 }
 
 $AppTitle = 'Excel Master Updater - Master File Synchronizer'
-$AppDesc  = 'High-performance Excel master updater with row-by-row review, InPlace OpenXML patching, and zero external dependencies'
+$AppDesc = 'High-performance Excel master updater with row-by-row review, InPlace OpenXML patching, and zero external dependencies'
 
 Write-Host "==========================================================" -ForegroundColor Cyan
 Write-Host " PS2EXE COMPILATION: Master-Updater" -ForegroundColor Cyan
@@ -68,17 +68,17 @@ if ($runningProc) {
 }
 
 $ps2exeParams = @{
-    InputFile     = $InputScript
-    OutputFile    = $OutputFile
-    Title         = $AppTitle
-    Description   = $AppDesc
-    Company       = 'Adam Mnich'
-    Product       = 'Excel Master Updater'
-    Copyright     = "Copyright (c) 2026 Adam Mnich"
-    Version       = '1.0.0.0'
-    noConsole     = $true
-    STA           = $true
-    x64           = $true
+    InputFile   = $InputScript
+    OutputFile  = $OutputFile
+    Title       = $AppTitle
+    Description = $AppDesc
+    Company     = 'Mnich'
+    Product     = 'Excel Master Updater'
+    Copyright   = "Copyright (c) 2026 Mnich"
+    Version     = '1.0.0.0'
+    noConsole   = $true
+    STA         = $true
+    x64         = $true
 }
 
 $embedFiles = @{}
@@ -111,6 +111,7 @@ Invoke-ps2exe @ps2exeParams
 if (Test-Path $OutputFile) {
     $sizeKb = [Math]::Round((Get-Item $OutputFile).Length / 1KB, 1)
     Write-Host "Build SUCCESS: $OutputFile ($sizeKb KB)" -ForegroundColor Green
-} else {
+}
+else {
     throw "Build failed: output file not found."
 }
